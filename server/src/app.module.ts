@@ -6,9 +6,11 @@ import { HealthController } from './health.controller.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 
+import { StitchesModule } from './stitches/stitches.module.js';
+
 @Module({
-  imports: [],
+  imports: [StitchesModule],
   controllers: [AppController, HealthController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }

@@ -5,18 +5,13 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
     return c > 3 && r && Object.defineProperty(target, key, r), r;
 };
 import { Module } from '@nestjs/common';
-import { HealthController } from './health.controller.js';
-import { AppController } from './app.controller.js';
-import { AppService } from './app.service.js';
-import { StitchesModule } from './stitches/stitches.module.js';
-let AppModule = class AppModule {
+import { StitchesService } from './stitches.service.js';
+let StitchesModule = class StitchesModule {
 };
-AppModule = __decorate([
+StitchesModule = __decorate([
     Module({
-        imports: [StitchesModule],
-        controllers: [AppController, HealthController],
-        providers: [AppService],
+        providers: [StitchesService]
     })
-], AppModule);
-export { AppModule };
-//# sourceMappingURL=app.module.js.map
+], StitchesModule);
+export { StitchesModule };
+//# sourceMappingURL=stitches.module.js.map

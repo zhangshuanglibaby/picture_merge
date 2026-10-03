@@ -1,0 +1,1 @@
+{"version":3,"file":"stitches.module.js","sourceRoot":"","sources":["../../src/stitches/stitches.module.ts"],"names":[],"mappings":";;;;;;AAAA,OAAO,EAAE,MAAM,EAAE,MAAM,gBAAgB,CAAC;AACxC,OAAO,EAAE,eAAe,EAAE,MAAM,uBAAuB,CAAC;AAMjD,IAAM,cAAc,GAApB,MAAM,cAAc;CAAI,CAAA;AAAlB,cAAc;IAH1B,MAAM,CAAC;QACN,SAAS,EAAE,CAAC,eAAe,CAAC;KAC7B,CAAC;GACW,cAAc,CAAI"}
