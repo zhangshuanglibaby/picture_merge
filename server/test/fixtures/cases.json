@@ -1,0 +1,53 @@
+{
+  "note": "Every files array is in upload order. cropTopPx applies to the corresponding file; the first value is always 0. All expected dimensions are for the final PNG.",
+  "cases": [
+    {
+      "name": "exact-overlap",
+      "files": ["overlap-1.png", "overlap-2.png"],
+      "cropTopPx": [0, 100],
+      "expectedWidth": 240,
+      "expectedHeight": 540
+    },
+    {
+      "name": "no-overlap",
+      "files": ["plain-1.png", "plain-2.png"],
+      "cropTopPx": [0, 0],
+      "expectedWidth": 240,
+      "expectedHeight": 640
+    },
+    {
+      "name": "five-mixed",
+      "files": ["mixed-1.png", "mixed-2.png", "mixed-3.png", "mixed-4.png", "mixed-5.png"],
+      "cropTopPx": [0, 80, 0, 70, 0],
+      "expectedWidth": 240,
+      "expectedHeight": 1350
+    },
+    {
+      "name": "similar-header-only",
+      "files": ["header-1.png", "header-2.png"],
+      "cropTopPx": [0, 0],
+      "expectedWidth": 240,
+      "expectedHeight": 600
+    },
+    {
+      "name": "different-width",
+      "files": ["width-1.png", "width-2.png"],
+      "cropTopPx": [0, 0],
+      "expectedWidth": 240,
+      "expectedHeight": 525
+    },
+    {
+      "name": "transparent",
+      "files": ["plain-1.png", "transparent.png"],
+      "cropTopPx": [0, 0],
+      "expectedWidth": 240,
+      "expectedHeight": 420,
+      "extraCheck": "Right half of the transparent input becomes white in the output."
+    },
+    {
+      "name": "invalid-image",
+      "files": ["plain-1.png", "invalid.png"],
+      "expectedError": "INVALID_IMAGE"
+    }
+  ]
+}
