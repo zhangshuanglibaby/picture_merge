@@ -12,7 +12,17 @@ import { afterAll, beforeAll, describe, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 
 // 从 server 目录定位已有的测试图片。
-const validImage = join(process.cwd(), 'test/fixtures/overlap-1.png');
+// 第一张测试图片。
+const firstImage = join(
+  process.cwd(),
+  'test/fixtures/overlap-1.png',
+);
+
+// 第二张测试图片，和第一张有 100 行重叠。
+const secondImage = join(
+  process.cwd(),
+  'test/fixtures/overlap-2.png',
+);
 const invalidImage = join(process.cwd(), 'test/fixtures/invalid.png');
 
 describe('POST /images/stitch', () => {
@@ -35,30 +45,39 @@ describe('POST /images/stitch', () => {
     }
   });
 
-  it('两张有效图片通过校验，但拼接尚未实现', async () => {
-    await request(app.getHttpServer())
+  it('上传两张图片后返回拼接后的 PNG', async () => {
+    // 请求接口，上传第一张图片和第二张图片。
+    const response = await request(app.getHttpServer())
       .post('/images/stitch')
-      // 两个文件都必须使用接口约定的 images 字段名。
-      .attach('images', validImage)
-      .attach('images', validImage)
-      .expect(501)
-      .expect({
-        code: 'NOT_IMPLEMENTED',
-        message: '图片拼接功能尚未实现',
-      });
+      .attach('images', firstImage)
+      .attach('images', secondImage)
+      .expect(200);
+
+    // 检查接口返回的类型确实是二进制 Buffer。
+    expect(Buffer.isBuffer(response.body)).toBe(true);
+
+    // PNG 文件至少应该有内容。
+    expect(response.body.length).toBeGreaterThan(0);
+
+    // 检查响应头是否声明为 PNG。
+    expect(response.headers['content-type']).toMatch(/image\/png/);
+
+    // 检查响应头是否允许浏览器直接预览。
+    expect(response.headers['content-disposition'])
+      .toContain('inline');
   });
 
   it('只有一张图片时拒绝请求', async () => {
     await request(app.getHttpServer())
       .post('/images/stitch')
-      .attach('images', validImage)
+      .attach('images', firstImage)
       .expect(400);
   });
 
   it('包含无效图片时拒绝请求', async () => {
     await request(app.getHttpServer())
       .post('/images/stitch')
-      .attach('images', validImage)
+      .attach('images', firstImage)
       .attach('images', invalidImage)
       .expect(400);
   });
