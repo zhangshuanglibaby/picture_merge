@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 // 引入灰度图类型，用数字构造便于理解的小图片。
 import type { GrayImage } from './load-gray-image.js';
 // 引入要测试的候选排序函数。
-import { rankOverlapCandidates, findOverlapCandidates } from './overlap-candidates.js';
+import { rankOverlapCandidates, findOverlapCandidates, chooseOverlapOrNull } from './overlap-candidates.js';
 
 describe('rankOverlapCandidates', () => {
   it('把真正吻合的重叠 2 行排在最前面', () => {
@@ -80,5 +80,35 @@ describe('findOverlapCandidates', () => {
     // 同时有多个 0 分，不能仅凭第一名就认定重叠高度。
     expect(results.filter((item) => item.score === 0).length)
       .toBeGreaterThan(1);
+  });
+});
+
+describe('chooseOverlapOrNull', () => {
+  it('第一名明显更好时返回它的重叠行数', () => {
+    expect(chooseOverlapOrNull([
+      { overlapRows: 120, score: 1 },
+      { overlapRows: 150, score: 10 },
+    ])).toBe(120);
+  });
+
+  it('两种位置同样吻合时不猜测', () => {
+    expect(chooseOverlapOrNull([
+      { overlapRows: 120, score: 0 },
+      { overlapRows: 150, score: 0 },
+    ])).toBeNull();
+  });
+
+  it('所有结果都不够相似时不裁切', () => {
+    expect(chooseOverlapOrNull([
+      { overlapRows: 120, score: 12 },
+      { overlapRows: 150, score: 20 },
+    ])).toBeNull();
+  });
+
+  it('重叠太短时不裁切', () => {
+    expect(chooseOverlapOrNull([
+      { overlapRows: 2, score: 0 },
+      { overlapRows: 120, score: 10 },
+    ])).toBeNull();
   });
 });

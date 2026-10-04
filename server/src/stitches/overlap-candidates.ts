@@ -94,3 +94,56 @@ export function findOverlapCandidates(
   // 对精查行数重新打分和排序，依然返回所有候选。
   return rankOverlapCandidates(first, second, [...fineRows]);
 }
+
+
+
+
+
+/**
+ * 加一个“守门员”：分数不够好、重叠太短、或第一名与第二名太接近，就不决定裁切位置
+ */
+
+// 以下数值是第一版的保守门槛，之后须用真实截图校准。
+const MIN_OVERLAP_ROWS = 40; // 最小重叠行数
+const MAX_ACCEPTABLE_SCORE = 8; // 最大可接受分数
+const MIN_SCORE_GAP = 3; // 最小分数差距
+
+// 返回重叠行数；无法明确判断时返回 null，不让后续步骤盲目裁切。
+/**
+ * 
+ * @param candidates 候选结果列表
+ * @returns 重叠行数或 null
+ */
+export function chooseOverlapOrNull(
+  candidates: readonly OverlapCandidate[],
+): number | null {
+  // 至少需要两个候选，才能判断第一名有没有明显胜过第二名。
+  if (candidates.length < 2) {
+    return null;
+  }
+
+  // 复制后排序，不修改调用者传入的原数组。
+  const sorted = [...candidates].sort((a, b) => a.score - b.score);
+  const best = sorted[0];
+  const second = sorted[1];
+
+  // 极短的“重叠”证据不足，暂时不自动使用。
+  if (best.overlapRows < MIN_OVERLAP_ROWS) {
+    return null;
+  }
+
+  // 最好的结果本身也不能差得太多。
+  if (!Number.isFinite(best.score) || best.score > MAX_ACCEPTABLE_SCORE) {
+    return null;
+  }
+
+  // 前两名得分相近，例如大片白底都得到 0 分，属于位置不明确。
+  if (
+    !Number.isFinite(second.score) ||
+    second.score - best.score < MIN_SCORE_GAP
+  ) {
+    return null;
+  }
+
+  return best.overlapRows;
+}
