@@ -147,3 +147,63 @@ export function chooseOverlapOrNull(
 
   return best.overlapRows;
 }
+
+
+// 只确认“完全一致”的重叠；其他情况暂时返回 null。
+/**
+ * 
+ * @param first 第一张图片
+ * @param second 第二张图片
+ * @param candidates 候选结果列表
+ * @returns 重叠行数或 null
+ */
+export function chooseExactOverlapOrNull(
+  first: GrayImage,
+  second: GrayImage,
+  candidates: readonly OverlapCandidate[],
+): number | null {
+  // 至少有两名，才能排除“多个位置同为第一名”。
+  if (candidates.length < 2 || first.width !== second.width) {
+    return null;
+  }
+
+  // 复制后排序，避免依赖调用者传入的顺序。
+  const [best, runnerUp] = [...candidates].sort(
+    (a, b) => a.score - b.score,
+  );
+
+  // 仅处理分数恰好为 0、且没有另一名也得 0 的情况。
+  if (
+    best.overlapRows < 40 ||
+    best.score !== 0 ||
+    runnerUp.score <= 0 ||
+    best.overlapRows > Math.min(first.height, second.height)
+  ) {
+    return null;
+  }
+
+  // 逐行比较像素值，检查是否存在不同亮度的像素。 
+  const pixelCount = best.overlapRows * first.width;
+  // 从图片底部开始，逐行检查像素值。
+  const firstStart = (first.height - best.overlapRows) * first.width;
+  // 第一行的像素值作为基准值。
+  const initialValue = first.pixels[firstStart];
+  let hasDifferentBrightness = false; // 标记是否找到不同亮度的像素。
+
+  // 逐个像素比较，检查是否存在不同亮度的像素。
+  for (let index = 0; index < pixelCount; index += 1) {
+    // 第一张底部与第二张顶部，逐个像素核对。
+    const firstValue = first.pixels[firstStart + index];
+    const secondValue = second.pixels[index];
+
+    if (firstValue !== secondValue) {
+      return null;
+    }
+
+    // 如果整个区域只有一种亮度，例如全白，就不能作为可靠证据。
+    if (firstValue !== initialValue) {
+      hasDifferentBrightness = true;
+    }
+  }
+  return hasDifferentBrightness ? best.overlapRows : null; // 返回重叠行数或 null。
+}

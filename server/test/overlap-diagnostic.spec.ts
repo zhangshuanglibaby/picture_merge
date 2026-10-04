@@ -11,7 +11,7 @@ import { expect, it } from 'vitest';
 import { loadGrayImage } from '../src/stitches/load-gray-image.js';
 // 引入候选搜索与“不确定就不选”的判断函数。
 import {
-  chooseOverlapOrNull,
+  chooseExactOverlapOrNull,
   findOverlapCandidates,
 } from '../src/stitches/overlap-candidates.js';
 
@@ -40,7 +40,11 @@ it('打印一组截图的重叠识别结果（诊断用）', async () => {
   console.log('分数最好的五个候选：');
   console.table(candidates.slice(0, 5));
 
-  // null 表示算法认为证据不足，没有贸然选择裁切位置。
-  const chosenRows = chooseOverlapOrNull(candidates);
+  // 全像素复核后，才允许把候选行数交给后续裁切步骤。
+  const chosenRows = chooseExactOverlapOrNull(first, second, candidates);
+
+  // 这是 cases.json 对这组测试图片给出的预期结果。
+  expect(chosenRows).toBe(100);
+  expect(first.height + second.height - chosenRows!).toBe(540);
   console.log('最终是否选择：', chosenRows ?? '无法确定');
 }, 30_000);
