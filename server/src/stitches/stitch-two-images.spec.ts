@@ -38,4 +38,35 @@ describe('stitchTwoImages', () => {
     await expect(stitchTwoImages(first, second, 320))
       .rejects.toThrow('重叠行数无效');
   });
+
+
+
+  it('重叠 0 行时完整保留两张图片', async () => {
+    // 使用现有的两张不重叠图片。
+    const plainFirst = join(process.cwd(), 'test/fixtures/plain-1.png');
+    const plainSecond = join(process.cwd(), 'test/fixtures/plain-2.png');
+
+    // 0 表示第二张不裁切，直接接在第一张后面。
+    const output = await stitchTwoImages(plainFirst, plainSecond, 0);
+    const metadata = await sharp(output).metadata();
+
+    // 两张图片各高 320 行，所以总高度应为 640 行。
+    expect(metadata.format).toBe('png');
+    expect(metadata.width).toBe(240);
+    expect(metadata.height).toBe(640);
+
+    // 检查接缝：成品第 320 行应等于第二张原图的第 0 行。
+    const actual = await sharp(output)
+      .extract({ left: 0, top: 320, width: 240, height: 1 })
+      .removeAlpha()
+      .raw()
+      .toBuffer();
+    const expected = await sharp(plainSecond)
+      .extract({ left: 0, top: 0, width: 240, height: 1 })
+      .removeAlpha()
+      .raw()
+      .toBuffer();
+
+    expect(actual.equals(expected)).toBe(true);
+  });
 });

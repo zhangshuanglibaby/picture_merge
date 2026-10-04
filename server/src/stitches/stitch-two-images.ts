@@ -38,7 +38,7 @@ export async function stitchTwoImages(
   // 检查重叠行数是否有效。
   if (
     !Number.isSafeInteger(overlapRows) ||
-    overlapRows < 1 ||
+    overlapRows < 0 ||  // 0 表示不裁掉第二张的任何一行，直接接在第一张下面。
     overlapRows > first.height ||
     overlapRows >= second.height
   ) {
