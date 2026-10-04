@@ -8,6 +8,8 @@
 import type { GrayImage } from './load-gray-image.js';
 // 引入上一步的函数：计算某一个候选重叠高度的分数。
 import { calculateOverlapScore } from './overlap-score.js';
+// 根据两张图的高度，生成最多 256 个粗筛重叠行数。
+import { createOverlapRowsToTry } from './overlap-rows.js';
 
 // 一条候选结果同时记录“重叠多少行”和“相似程度”。
 export type OverlapCandidate = {
@@ -45,4 +47,50 @@ export function rankOverlapCandidates(
 
   // 返回所有结果，不在这里擅自决定裁切位置。
   return candidates;
+}
+
+
+// 先粗筛，再检查较好候选附近的每一个整数行数。
+// 返回排名供后续判断；这里不宣称第一名一定正确。
+/**
+ * 
+ * @param first 第一张图片
+ * @param second 第二张图片
+ * @returns 最佳重叠行数
+ */
+export function findOverlapCandidates(
+  first: GrayImage,
+  second: GrayImage,
+): OverlapCandidate[] {
+  // 先粗筛，再检查较好候选附近的每一个整数行数。
+  const coarseRows = createOverlapRowsToTry(first.height, second.height);
+  // 粗筛结果
+  const coarseResults = rankOverlapCandidates(first, second, coarseRows);
+
+  // 小图片的所有行数已经试过，不必重复计算。
+  const maxRows = Math.min(first.height, second.height);
+  if (maxRows <= 256) {
+    return coarseResults;
+  }
+
+  // 大图片粗筛时相邻候选可能隔了若干行。
+  const radius = Math.ceil(maxRows / 256);
+  const fineRows = new Set<number>(); // 记录已经检查过的行数，避免重复计算。
+
+  // 在前 5 名附近各查看这个距离内的整数行数。
+  for (const candidate of coarseResults.slice(0, 5)) {
+    for (
+      let row = candidate.overlapRows - radius; // 从候选行数往左看。
+      row <= candidate.overlapRows + radius; // 到候选行数往右看。
+      row += 1 // 每次看一行。
+    ) {
+      // 只保留两张图片实际允许的重叠高度。
+      if (row >= 1 && row <= maxRows) {
+        fineRows.add(row);
+      }
+    }
+  }
+
+  // 对精查行数重新打分和排序，依然返回所有候选。
+  return rankOverlapCandidates(first, second, [...fineRows]);
 }
