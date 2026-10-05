@@ -86,4 +86,43 @@ describe('DisconnectedWaitFilter', () => {
       parentCatch.mockRestore();
     }
   });
+
+  it.each([false, true])(
+    'Request aborted，连接已断开=%s 时只过滤预期情况',
+    (destroyed) => {
+      // 监视 Nest 默认过滤器，确认异常是否继续向上交给 Nest。
+      const parentCatch = vi
+        .spyOn(BaseExceptionFilter.prototype, 'catch')
+        .mockImplementation(() => undefined);
+
+      const filter = new DisconnectedWaitFilter();
+
+      // destroyed=true 模拟客户端断开；false 模拟连接仍然存在。
+      const response = { destroyed } as Response;
+
+      const host = {
+        switchToHttp: () => ({
+          getResponse: () => response,
+        }),
+      } as unknown as ArgumentsHost;
+
+      // 这是 Multer 上传中途断开时产生的普通 Error。
+      const exception = new Error('Request aborted');
+
+      try {
+        filter.catch(exception, host);
+
+        if (destroyed) {
+          // 客户端已断开：不记录这条预期错误。
+          expect(parentCatch).not.toHaveBeenCalled();
+        } else {
+          // 连接仍在：不能误吞同名异常。
+          expect(parentCatch).toHaveBeenCalledWith(exception, host);
+        }
+      } finally {
+        // 恢复 Nest 默认过滤器，避免影响其他测试。
+        parentCatch.mockRestore();
+      }
+    },
+  );
 });
