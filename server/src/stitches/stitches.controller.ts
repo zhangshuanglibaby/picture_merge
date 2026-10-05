@@ -19,7 +19,10 @@ import {
   HttpCode, // 状态码装饰器，用来指定接口成功时返回的 HTTP 状态码。
   HttpStatus, // HTTP 状态码枚举，包含所有 HTTP 状态码。
   StreamableFile, // NestJS 专门用于返回图片、PDF 等二进制文件的类型。
+  Res, // 取得 HTTP 响应对象，用于识别排队期间客户端提前断开。
 } from '@nestjs/common';
+// Express 响应对象的类型；只用于 TypeScript 检查，不会产生运行时代码。
+import type { Response } from 'express';
 
 // 引入处理多个上传文件的 Multer 拦截器。
 import { FilesInterceptor } from '@nestjs/platform-express';
@@ -82,6 +85,8 @@ export class StitchesController {
   async stitch(
     // 读取当前请求对象，从中取得临时目录。
     @Req() request: UploadRequest,
+    // 保留 NestJS 原有的自动响应流程，同时读取连接关闭状态。
+    @Res({ passthrough: true }) response: Response,
 
     // 读取字段名为 images 的所有上传文件。
     @UploadedFiles() files: Express.Multer.File[],
@@ -97,7 +102,30 @@ export class StitchesController {
 
       // 尝试取得一个处理位置。
       // 如果当前两个位置都在使用，任务会进入最多两个任务的等待队列。
-      const release = await this.stitchTaskLimiter.acquire();
+      // 取消信号只用于“尚未取得执行位置”的阶段。
+      const waitingAbort = new AbortController();
+
+      // 响应提前关闭才表示需要取消等待；正常响应结束不算取消。
+      const onResponseClose = () => {
+        if (!response.writableFinished) {
+          waitingAbort.abort();
+        }
+      };
+
+      // 监听客户端断开；如果连接此前已断开，也立即触发取消。
+      response.once('close', onResponseClose);
+      if (response.destroyed) {
+        onResponseClose();
+      }
+
+      // 限流器收到取消信号后，会把仍在排队的任务移出队列。
+      // 无论取得位置、队列已满还是等待被取消，都移除响应监听。
+      // 取得位置后不再取消 worker：它必须先结束，工作区才能清理。
+      const release = await this.stitchTaskLimiter
+        .acquire(waitingAbort.signal)
+        .finally(() => {
+          response.off('close', onResponseClose);
+        });
 
       // 执行位置和等待队列都满时，才返回 503。
       if (release === null) {

@@ -594,6 +594,14 @@ describe('POST /images/stitch', () => {
   it('排队请求断开后从等待队列移除', async () => {
     // 使用 Controller 正在使用的同一个限流器，先占满两个执行位置。
     const limiter = app.get(StitchTaskLimiter);
+
+    // 只追踪本次请求新建的工作区，不误判之前已有的目录。
+    const before = new Set(
+      (await readdir(tmpdir())).filter((name) =>
+        name.startsWith('image-stitch-'),
+      ),
+    );
+
     const releaseFirst = limiter.tryAcquire();
     const releaseSecond = limiter.tryAcquire();
 
@@ -613,6 +621,15 @@ describe('POST /images/stitch', () => {
       // 确认 HTTP 请求确实进入了等待队列。
       await waitForWaitingCount(limiter, 1);
 
+      // 请求已进入队列，此时找出它新建的工作区。
+      const createdWorkspaces = (await readdir(tmpdir())).filter(
+        (name) => name.startsWith('image-stitch-') && !before.has(name),
+      );
+
+      // 确认确实创建了一个工作区，里面保存了两张上传图片。
+      expect(createdWorkspaces).toHaveLength(1);
+      expect(await readdir(join(tmpdir(), createdWorkspaces[0]))).toHaveLength(2);
+
       // 模拟客户端在排队期间断开连接。
       queuedRequest.abort();
       await requestSettled;
@@ -626,6 +643,14 @@ describe('POST /images/stitch', () => {
       // 正确行为：等待任务被移除；两个预占的位置仍在使用。
       expect(limiter.getWaitingCount()).toBe(0);
       expect(limiter.getActiveCount()).toBe(2);
+
+      // 清理是异步的：反复检查本次工作区，最多等待 2 秒。
+      await expect.poll(async () => {
+        const current = new Set(await readdir(tmpdir()));
+
+        // 返回本次创建、但仍留在磁盘上的目录。
+        return createdWorkspaces.filter((name) => current.has(name));
+      }, { interval: 10, timeout: 2_000 }).toEqual([]);
     } finally {
       // 即使断言失败，也归还位置，避免测试结束后留下排队任务。
       queuedRequest.abort();
