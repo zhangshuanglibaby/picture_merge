@@ -48,6 +48,11 @@ export class StitchWorkerPool implements OnModuleDestroy {
 
       // 与现有两个并发处理位置保持一致。
       maxThreads: 2,
+
+      // 禁止 Piscina 自己额外积压任务。
+      // 等待队列由 StitchTaskLimiter 统一管理，最多等待两个任务。
+      // 这样可以避免出现两套队列，便于控制内存和排查问题。
+      maxQueue: 0,
     });
   }
 
