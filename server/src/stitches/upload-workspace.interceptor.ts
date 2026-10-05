@@ -63,6 +63,16 @@ export class UploadWorkspaceInterceptor implements NestInterceptor {
           throw new StitchError('INVALID_COUNT', '请选择 2～5 张图片');
         }
 
+        // 上传接口只接收名为 images 的文件字段。
+        // 如果前端误传 photos 等字段，上传组件会在进入 Controller 前拒绝请求。
+        // 把它转换为前端能够识别的业务错误，而不是直接返回英文提示。
+        if (
+          error instanceof BadRequestException &&
+          error.message.startsWith('Unexpected file field - ')
+        ) {
+          throw new StitchError('INVALID_COUNT', '请使用 images 字段上传图片');
+        }
+
         // 上传组件会先拦截过大的文件，此时图片校验逻辑还没有机会运行。
         // 只转换它明确给出的“单个文件过大”错误，保留其他异常的原有行为。
         if (

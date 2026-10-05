@@ -215,4 +215,20 @@ describe('POST /images/stitch', () => {
       message: '单张图片过大',
     });
   }, 30_000);
+
+  it('上传字段名不是 images 时返回明确错误码', async () => {
+    // 故意把约定的 images 写成 photos，模拟前端传错字段名。
+    // 两张图片本身有效，这样测试只针对“字段名错误”。
+    const response = await request(app.getHttpServer())
+      .post('/images/stitch')
+      .attach('photos', firstImage)
+      .attach('photos', secondImage)
+      .expect(400);
+  
+    // 前端需要通过 code 识别错误，而不只依赖 HTTP 400。
+    expect(response.body).toMatchObject({
+      code: 'INVALID_COUNT',
+      message: '请使用 images 字段上传图片',
+    });
+  });
 });
