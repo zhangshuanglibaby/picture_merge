@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 // 引入 Vitest 的测试和断言工具。
 import { expect, it } from 'vitest';
-// 引入本步创建的多图拼接函数。
-import { renderStitch } from './render-stitch.js';
+// 引入拼接函数，以及本步要单独验证的成品字节数检查函数。
+import { assertOutputByteLimit, renderStitch } from './render-stitch.js';
 // 引入项目已有的临时目录工具，让测试生成的图片在结束后被删除。
 import { createUploadWorkspace } from './upload-workspace.js';
 // 引入项目的尺寸限制，避免在测试里另写一套上限数字。
@@ -104,4 +104,23 @@ it('拼接结果超过最大高度时返回 OUTPUT_TOO_LARGE', async () => {
     // 无论断言通过还是失败，都清理这次创建的临时图片。
     await workspace.cleanup();
   }
+});
+it('成品 PNG 恰好达到字节上限可以通过，超过 1 字节则拒绝', () => {
+  // 只创建一次比上限大 1 字节的 Buffer，不需要生成真实的巨型 PNG。
+  // 此测试只检查字节数规则，图片编码正确性由其他拼接测试负责。
+  const overLimit = Buffer.alloc(IMAGE_LIMITS.maxOutputBytes + 1);
+
+  // 截取前面的字节，得到长度恰好等于上限的 Buffer。
+  const atLimit = overLimit.subarray(0, IMAGE_LIMITS.maxOutputBytes);
+
+  // “超过”才拒绝；恰好等于上限应原样返回。
+  expect(assertOutputByteLimit(atLimit)).toBe(atLimit);
+
+  // 只多 1 字节，就应得到 HTTP 422 对应的业务错误码。
+  expect(() => assertOutputByteLimit(overLimit)).toThrowError(
+    expect.objectContaining({
+      status: 422,
+      response: expect.objectContaining({ code: 'OUTPUT_TOO_LARGE' }),
+    }),
+  );
 });

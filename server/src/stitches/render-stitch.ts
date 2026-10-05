@@ -9,6 +9,27 @@ import { IMAGE_LIMITS } from '../config/image-limits.js';
 // 引入项目已有的业务异常类，用于返回明确的错误码和 HTTP 状态码。
 import { StitchError } from './stitch.error.js';
 
+
+/**
+ * 检查已经编码完成的 PNG 是否超过成品文件大小上限。
+ * 单独写成函数，方便不用生成巨型图片就能测试字节边界。
+ */
+/**
+ * 
+ * @param output 已经编码完成的 PNG
+ * @returns 没有超限时原样返回 PNG，交给控制器响应。
+ */
+export function assertOutputByteLimit(output: Buffer): Buffer {
+  // length 是编码后 PNG 的实际字节数；只有超过上限才拒绝。
+  if (output.length > IMAGE_LIMITS.maxOutputBytes) {
+    // 把“成品过大”作为明确的业务错误交给接口返回。
+    throw new StitchError('OUTPUT_TOO_LARGE', '拼接结果超出处理范围');
+  }
+
+  // 未超限时直接返回原数据；不要在这里再次调用自己。
+  return output;
+}
+
 /**
  * 按顺序拼接 2～5 张图片。
  * cropTopPx[i] 是第 i 张顶部要裁掉的行数；第一张必须是 0。
@@ -128,9 +149,11 @@ export async function renderStitch(
 
   // Buffer.length 是成品 PNG 的实际字节数，不是图片的像素数量。
   // 超限时抛出已有的业务错误，让接口返回 422 和明确的错误码。
-  if (output.length > IMAGE_LIMITS.maxOutputBytes) {
-    throw new StitchError('OUTPUT_TOO_LARGE', '拼接结果超出处理范围');
-  }
-  // 只有成品文件大小合规，才把完整 PNG 交给控制器返回。
-  return output;
+  // if (output.length > IMAGE_LIMITS.maxOutputBytes) {
+  //   throw new StitchError('OUTPUT_TOO_LARGE', '拼接结果超出处理范围');
+  // }
+  // // 只有成品文件大小合规，才把完整 PNG 交给控制器返回。
+  // return output;
+  // 图片已合成并编码；调用上面的检查函数，合规后返回 PNG。
+  return assertOutputByteLimit(output);
 }
