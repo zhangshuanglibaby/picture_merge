@@ -3,20 +3,22 @@
 import { existsSync } from 'node:fs';
 
 // Node.js 自带的异步文件系统模块。
-// writeFile 用来写一份测试文件，检查清理时会不会把文件一起删除。
-import { writeFile } from 'node:fs/promises';
+// rm 用于测试结束后的真实兜底清理；writeFile 用于创建测试文件。
+import { rm as removeDirectoryOnTestEnd, writeFile } from 'node:fs/promises';
 
 // Node.js 自带的路径模块。
 // join 用来组合临时目录路径和测试文件名。
 import { join } from 'node:path';
 
 // Vitest 是当前项目的测试框架。
-// describe 用来组织测试，it 定义一项测试，expect 检查结果是否符合预期。
-import { describe, expect, it } from 'vitest';
+// describe 用来组织测试，it 定义一项测试，expect 检查结果是否符合预期。vi 用来创建可控的删除函数模拟。
+import { describe, expect, it, vi } from 'vitest';
 
-// 导入我们自己编写的函数，作为这份测试的对象。
-// ESM 项目中的本地导入路径按当前工程约定使用 .js 后缀。
-import { createUploadWorkspace } from './upload-workspace.js';
+// 同时导入删除函数类型，保证测试模拟函数的参数类型正确。
+import {
+  createUploadWorkspace,
+  type RemoveUploadWorkspace,
+} from './upload-workspace.js';
 
 
 describe('上传临时目录', () => {
@@ -44,4 +46,37 @@ describe('上传临时目录', () => {
       await second.cleanup();
     }
   })
+
+  it('删除失败两次后第三次成功时会重试并完成清理', async () => {
+    let attempts = 0;
+
+    // 模拟前两次删除失败，第三次调用真实 rm 删除目录。
+    const removeDirectory = vi.fn<RemoveUploadWorkspace>(
+      async (directory, options) => {
+        attempts += 1;
+
+        if (attempts < 3) {
+          throw new Error('模拟删除失败');
+        }
+
+        await removeDirectoryOnTestEnd(directory, options);
+      },
+    );
+
+    const workspace = await createUploadWorkspace({ removeDirectory });
+
+    try {
+      await workspace.cleanup();
+
+      // 前两次失败后，第三次应该成功。
+      expect(removeDirectory).toHaveBeenCalledTimes(3);
+      expect(existsSync(workspace.directory)).toBe(false);
+    } finally {
+      // 如果断言提前失败，仍然清理测试目录。
+      await removeDirectoryOnTestEnd(workspace.directory, {
+        recursive: true,
+        force: true,
+      });
+    }
+  });
 })
