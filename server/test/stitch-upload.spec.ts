@@ -771,4 +771,86 @@ describe('POST /images/stitch', () => {
       workerSpy.mockRestore();
     }
   }, 10_000);
+
+  it('worker 取消后释放执行位置并清理工作区', async () => {
+    // 记录测试前已有的工作区，避免误判其他目录。
+    const before = new Set(
+      (await readdir(tmpdir())).filter((name) =>
+        name.startsWith('image-stitch-'),
+      ),
+    );
+
+    const limiter = app.get(StitchTaskLimiter);
+    const workerPool = app.get(StitchWorkerPool);
+
+    // 模拟 worker 收到取消信号后抛出 AbortError。
+    const workerSpy = vi.spyOn(workerPool, 'run')
+      .mockImplementation((_input, signal) => {
+        return new Promise<StitchResult>((_resolve, reject) => {
+          // 监听 Controller 传入的运行阶段取消信号。
+          signal?.addEventListener(
+            'abort',
+            () => {
+              // 模拟真实取消异常。
+              reject(
+                new DOMException(
+                  'The task has been aborted',
+                  'AbortError',
+                ),
+              );
+            },
+            { once: true },
+          );
+        });
+      });
+
+    const upload = request(app.getHttpServer())
+      .post('/images/stitch')
+      .attach('images', firstImage)
+      .attach('images', secondImage);
+
+    // 主动断开客户端请求，并接住断开产生的请求异常。
+    const requestDone = upload.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    try {
+      // 确认 worker 已经开始执行。
+      await expect.poll(() => workerSpy.mock.calls.length).toBe(1);
+
+      // 取得 Controller 传给 worker 的取消信号。
+      const workerSignal = workerSpy.mock.calls[0]?.[1] as AbortSignal;
+
+      // 模拟客户端断开。
+      upload.abort();
+
+      // 等待响应关闭事件触发 worker 取消。
+      await expect
+        .poll(() => workerSignal.aborted, { timeout: 2_000 })
+        .toBe(true);
+
+      // 等待 Controller、过滤器和工作区拦截器完成收尾。
+      await requestDone;
+
+      // 执行位置最终必须释放。
+      await expect
+        .poll(() => limiter.getActiveCount(), { timeout: 2_000 })
+        .toBe(0);
+
+      // 本次请求创建的工作区最终必须被删除。
+      await expect.poll(async () => {
+        const current = new Set(await readdir(tmpdir()));
+
+        return [...current].filter(
+          (name) => name.startsWith('image-stitch-') && !before.has(name),
+        );
+      }, { timeout: 2_000 }).toEqual([]);
+    } finally {
+      // 测试失败时恢复 worker 方法，避免影响后续测试。
+      upload.abort();
+      await requestDone;
+      workerSpy.mockRestore();
+    }
+  }, 10_000);
 });
