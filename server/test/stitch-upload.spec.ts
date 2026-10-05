@@ -2,6 +2,8 @@
 import { join } from 'node:path';
 // Node.js 的异步文件工具：读取系统临时目录下有哪些文件夹。
 import { readdir } from 'node:fs/promises';
+// Node.js 的随机字节工具：生成不容易被 PNG 压缩的小图片测试数据。
+import { randomBytes } from 'node:crypto';
 // Node.js 的系统工具：找到当前电脑用于存放临时文件的目录。
 import { tmpdir } from 'node:os';
 // 引入 Sharp，用来读取接口返回的 PNG 尺寸。
@@ -282,4 +284,48 @@ describe('POST /images/stitch', () => {
     // 即使上传到一半失败，已经上传的第一张也不能遗留在磁盘。
     expect(leftovers).toEqual([]);
   });
+
+  it('整组图片超过 50 MiB 时拒绝请求并清理临时目录', async () => {
+    // 记住请求前已有的工作目录，避免把旧目录误认为本次残留。
+    const before = new Set(
+      (await readdir(tmpdir())).filter((name) =>
+        name.startsWith('image-stitch-'),
+      ),
+    );
+
+    // 生成一张 2304 × 2048 的真实 PNG。
+    // 随机像素不容易被压缩；关闭 PNG 压缩使文件大小更稳定。
+    const imageBuffer = await sharp(
+      randomBytes(2304 * 2048 * 3),
+      { raw: { width: 2304, height: 2048, channels: 3 } },
+    ).png({ compressionLevel: 0 }).toBuffer();
+
+    // 确认单张没有超过 15 MiB，但四张相加超过 50 MiB。
+    // 这样测到的是“整组限制”，不是“单文件限制”。
+    expect(imageBuffer.length).toBeLessThan(IMAGE_LIMITS.maxFileBytes);
+    expect(imageBuffer.length * 4).toBeGreaterThan(
+      IMAGE_LIMITS.maxUploadBytes,
+    );
+
+    // 将同一份合法图片作为四个文件上传。
+    const response = await request(app.getHttpServer())
+      .post('/images/stitch')
+      .attach('images', imageBuffer, 'first.png')
+      .attach('images', imageBuffer, 'second.png')
+      .attach('images', imageBuffer, 'third.png')
+      .attach('images', imageBuffer, 'fourth.png')
+      .expect(413);
+
+    // 检查前端能收到明确的业务错误，而不只是 HTTP 状态码。
+    expect(response.body).toMatchObject({
+      code: 'IMAGE_TOO_LARGE',
+      message: '本次上传总大小超出限制',
+    });
+
+    // 检查本次上传的图片和工作目录都没有遗留。
+    const leftovers = (await readdir(tmpdir())).filter(
+      (name) => name.startsWith('image-stitch-') && !before.has(name),
+    );
+    expect(leftovers).toEqual([]);
+  }, 60_000);
 });
