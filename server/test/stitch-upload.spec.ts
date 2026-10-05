@@ -178,7 +178,8 @@ describe('POST /images/stitch', () => {
     // images 是接口约定的上传字段名。
     // 六次上传同一张有效图片即可测试“数量上限”；
     // 这里不需要准备六张内容不同的图片。
-    await request(app.getHttpServer())
+    // 保存实际响应，供下面查看响应头和响应体。
+    const response = await request(app.getHttpServer())
       .post('/images/stitch')
       .attach('images', firstImage)
       .attach('images', firstImage)
@@ -186,6 +187,11 @@ describe('POST /images/stitch', () => {
       .attach('images', firstImage)
       .attach('images', firstImage)
       .attach('images', firstImage)
-      .expect(400); // 第六张超出最多五张的限制，请求应被拒绝。
+      .expect(400);
+    // 六张超出了允许的 2～5 张；前端应能通过 code 识别这个错误。
+    expect(response.body).toMatchObject({
+      code: 'INVALID_COUNT',
+      message: '请选择 2～5 张图片',
+    });
   });
 });

@@ -9,7 +9,11 @@ import {
   type ExecutionContext,
   Injectable,
   type NestInterceptor,
+  BadRequestException, // 用来识别上传组件返回的“请求有误”异常。
 } from '@nestjs/common';
+
+// StitchError 是项目自己的错误类型，能给前端返回 code 和中文 message。
+import { StitchError } from './stitch.error.js';
 
 // RxJS 是 NestJS 使用的异步处理库。
 // defer 在请求被执行时才开始工作；lastValueFrom 等待后续处理结束。
@@ -45,11 +49,23 @@ export class UploadWorkspaceInterceptor implements NestInterceptor {
       request.uploadWorkspace = workspace;
 
       try {
-        // 等后续处理完成；如果它报错，错误会继续向外传递。
+        // 等待上传和后续拼接处理完成；成功时原样返回结果。
         const result: unknown = await lastValueFrom(next.handle());
         return result;
+      } catch (error: unknown) {
+        // 第六张图片会先被上传组件拦住，无法进入服务中的数量校验。
+        // 只把这一种明确的错误转换为项目约定的 INVALID_COUNT。
+        if (
+          error instanceof BadRequestException &&
+          error.message === 'Too many files'
+        ) {
+          throw new StitchError('INVALID_COUNT', '请选择 2～5 张图片');
+        }
+
+        // 其他错误与图片数量无关，保持原样继续抛出，避免掩盖真实问题。
+        throw error;
       } finally {
-        // 成功和报错都会执行；等待文件真正删除后才结束本次处理。
+        // 无论成功、数量超限或发生其他错误，都清理本次上传的临时目录。
         delete request.uploadWorkspace;
         await workspace.cleanup();
       }
