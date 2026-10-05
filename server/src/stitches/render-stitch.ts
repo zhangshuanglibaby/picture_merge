@@ -113,14 +113,24 @@ export async function renderStitch(
     nextTop += size.height;
   }
 
-  // 创建白底画布，一次合成所有图层，最后输出一张 PNG。
-  return sharp({
-    create: { // 创建白底画布。
+  /// 先完成图层合成和 PNG 编码，取得成品的二进制数据。
+  const output = await sharp({
+    create: {
       width: outputWidth, // 宽度。
       height: outputHeight, // 高度。
       channels: 3, // 颜色通道数。
       background: '#ffffff', // 背景颜色。
     },
-  }).composite(layers).png().toBuffer(); // 合成所有图层，最后输出一张 PNG。
+  })
+    .composite(layers) // 合成所有图层。
+    .png() // 转换为 PNG 格式。
+    .toBuffer(); // 转换为 Buffer。
 
+  // Buffer.length 是成品 PNG 的实际字节数，不是图片的像素数量。
+  // 超限时抛出已有的业务错误，让接口返回 422 和明确的错误码。
+  if (output.length > IMAGE_LIMITS.maxOutputBytes) {
+    throw new StitchError('OUTPUT_TOO_LARGE', '拼接结果超出处理范围');
+  }
+  // 只有成品文件大小合规，才把完整 PNG 交给控制器返回。
+  return output;
 }

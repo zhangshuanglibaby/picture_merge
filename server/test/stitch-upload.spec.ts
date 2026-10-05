@@ -12,6 +12,8 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, it } from 'vitest';
 // 引入真正的应用模块，使测试经过路由、拦截器和校验服务。
 import { AppModule } from '../src/app.module.js';
+// 引入项目统一的图片尺寸限制，让测试使用与后端相同的上限。
+import { IMAGE_LIMITS } from '../src/config/image-limits.js';
 
 // 从 server 目录定位已有的测试图片。
 // 第一张测试图片。
@@ -140,4 +142,35 @@ describe('POST /images/stitch', () => {
     // 300 + (300 - 80) + 300 + (300 - 70) + 300 = 1350。
     expect(metadata.height).toBe(1350);
   });
+
+  it('拼接结果超过高度上限时返回 422 和明确错误码', async () => {
+    // 每张图比输出高度上限的一半多 1 行。
+    // 当前上限为 30000，因此单张是 15001 行，两张合计 30002 行。
+    const singleHeight = Math.floor(IMAGE_LIMITS.maxOutputHeight / 2) + 1;
+
+    // 在内存里生成合法的 PNG；宽度仅 1 像素，避免占用大量内存。
+    // 纯白图片不能提供可靠的重叠证据，因此不会自动裁掉其中一张。
+    const imageBuffer = await sharp({
+      create: {
+        width: 1,
+        height: singleHeight,
+        channels: 3,
+        background: '#ffffff',
+      },
+    }).png().toBuffer();
+
+    // 像前端一样，向真正的上传接口发送两张图片。
+    const response = await request(app.getHttpServer())
+      .post('/images/stitch')
+      .attach('images', imageBuffer, 'first.png')
+      .attach('images', imageBuffer, 'second.png')
+      .expect(422);
+
+    // 失败时应返回 JSON 错误，而不是一张不完整的 PNG。
+    expect(response.headers['content-type']).toMatch(/application\/json/);
+    expect(response.body).toMatchObject({
+      code: 'OUTPUT_TOO_LARGE',
+      message: '拼接结果超出处理范围',
+    });
+  }, 30_000);
 });

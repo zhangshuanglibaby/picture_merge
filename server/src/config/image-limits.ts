@@ -8,6 +8,7 @@ export const IMAGE_LIMITS = {
   maxInputSide: 16_000,           // 单张最长边最多 16000 像素。
   maxOutputPixels: 25_000_000,    // 拼接结果最多 2500 万像素。
   maxOutputHeight: 30_000,        // 拼接结果最高 30000 像素。
+  maxOutputBytes: 30 * 1024 * 1024, // 成品 PNG 最多 30 MiB；先作为开发阶段的限制值。 
 } as const;
 
 // 启动时检查配置有没有被意外改成不合理的值。
