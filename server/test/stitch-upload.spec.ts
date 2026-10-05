@@ -21,6 +21,10 @@ import { AppModule } from '../src/app.module.js';
 // 引入项目统一的图片尺寸限制，让测试使用与后端相同的上限。
 import { IMAGE_LIMITS } from '../src/config/image-limits.js';
 
+// 引入真实应用使用的并发限流器。
+// 测试需要取得 NestJS 容器中的同一个实例，才能真正占满控制器使用的两个位置。
+import { StitchTaskLimiter } from '../src/stitches/stitch-task-limiter.js';
+
 // 从 server 目录定位已有的测试图片。
 // 第一张测试图片。
 const firstImage = join(
@@ -147,6 +151,81 @@ describe('POST /images/stitch', () => {
     // 高度为：
     // 300 + (300 - 80) + 300 + (300 - 70) + 300 = 1350。
     expect(metadata.height).toBe(1350);
+  });
+
+  it('并发位置占满时返回 503/BUSY，清理工作区，释放后恢复 200', async () => {
+    // 从 NestJS 应用容器中取得限流器。
+    // 这里拿到的是控制器实际注入的单例，而不是测试中新建的另一个对象。
+    const limiter = app.get(StitchTaskLimiter);
+
+    // 测试开始前不应该有其他测试遗留的活动任务。
+    expect(limiter.getActiveCount()).toBe(0);
+
+    // 第一次调用占用第一个处理位置。
+    const releaseFirst = limiter.tryAcquire();
+
+    // 第二次调用占用第二个处理位置。
+    const releaseSecond = limiter.tryAcquire();
+
+    try {
+      // 两次占位都必须成功，否则说明测试没有真正制造“已满”状态。
+      expect(releaseFirst).not.toBeNull();
+      expect(releaseSecond).not.toBeNull();
+
+      // 记录请求开始前已有的工作区。
+      // 只检查本次新增目录，避免误把旧目录当成测试残留。
+      const before = new Set(
+        (await readdir(tmpdir())).filter((name) =>
+          name.startsWith('image-stitch-'),
+        ),
+      );
+
+      // 此时两个处理位置都被占用，因此接口应该快速返回 503。
+      const busyResponse = await request(app.getHttpServer())
+        .post('/images/stitch')
+        .attach('images', firstImage)
+        .attach('images', secondImage)
+        .expect(503);
+
+      // 确认业务错误码是 BUSY，而不是普通的处理失败。
+      expect(busyResponse.body).toMatchObject({
+        code: 'BUSY',
+        message: '当前处理任务较多，请稍后重试',
+      });
+
+      // BUSY 请求虽然没有进入图片处理，但仍然创建过临时工作区。
+      // 请求结束后不应留下本次新增的 image-stitch- 目录。
+      const leftovers = (await readdir(tmpdir())).filter(
+        (name) => name.startsWith('image-stitch-') && !before.has(name),
+      );
+      expect(leftovers).toEqual([]);
+
+      // 释放两个预先占用的处理位置。
+      // 释放后，后续请求应该可以重新进入控制器。
+      releaseFirst?.();
+      releaseSecond?.();
+
+      // 确认两个位置都已经归还。
+      expect(limiter.getActiveCount()).toBe(0);
+
+      // 发送同样的有效请求，验证释放后接口恢复正常。
+      const recoveredResponse = await request(app.getHttpServer())
+        .post('/images/stitch')
+        .attach('images', firstImage)
+        .attach('images', secondImage)
+        .expect(200);
+
+      // 成功响应应该是 PNG 图片，而不是 JSON 错误。
+      expect(recoveredResponse.headers['content-type']).toMatch(/image\/png/);
+
+      // 确认控制器在正常请求结束时也归还了处理位置。
+      expect(limiter.getActiveCount()).toBe(0);
+    } finally {
+      // 测试失败时也要归还位置，避免影响后面的测试。
+      // release 函数内部可以防止重复归还，因此这里重复调用是安全的。
+      releaseFirst?.();
+      releaseSecond?.();
+    }
   });
 
   it('拼接结果超过高度上限时返回 422 和明确错误码', async () => {
