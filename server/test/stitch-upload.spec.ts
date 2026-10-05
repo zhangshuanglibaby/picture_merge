@@ -737,6 +737,18 @@ describe('POST /images/stitch', () => {
 
       // 断开客户端，并确认服务端观察到了响应关闭。
       upload.abort();
+
+      // 读取 Controller 传给 worker 的运行阶段取消信号。
+      const workerSignal = workerSpy.mock.calls[0]?.[1] as AbortSignal;
+
+      // Controller 应该已经把取消信号传给 worker。
+      expect(workerSignal).toBeInstanceOf(AbortSignal);
+
+      // 等待响应关闭监听异步触发 workerAbort.abort()。
+      await expect
+        .poll(() => workerSignal.aborted, { timeout: 2_000 })
+        .toBe(true);
+
       await expect.poll(() => responseClosed, { timeout: 2_000 }).toBe(true);
       await requestDone;
 

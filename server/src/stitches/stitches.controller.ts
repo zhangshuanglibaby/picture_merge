@@ -105,37 +105,58 @@ export class StitchesController {
         );
       }
 
-      // 尝试取得一个处理位置。
-      // 如果当前两个位置都在使用，任务会进入最多两个任务的等待队列。
-      // 取消信号只用于“尚未取得执行位置”的阶段。
+      // 排队阶段使用独立信号，客户端排队断线时取消等待。
       const waitingAbort = new AbortController();
+
+      // 已取得执行位置后，使用这个信号取消正在运行的 worker。
+      const workerAbort = new AbortController();
+
+      // 标记是否已经取得执行位置。
+      let hasExecutionSlot = false;
 
       // 响应提前关闭才表示需要取消等待；正常响应结束不算取消。
       const onResponseClose = () => {
-        if (!response.writableFinished) {
-          waitingAbort.abort();
+        // 正常完成响应时关闭连接，不应该取消任务。
+        if (response.writableFinished) {
+          return;
         }
+
+        // 已取得执行位置，说明需要取消正在运行的 worker。
+        if (hasExecutionSlot) {
+          workerAbort.abort();
+          return;
+        }
+
+        // 尚未取得执行位置，取消排队等待。
+        waitingAbort.abort();
       };
 
       // 监听客户端断开；如果连接此前已断开，也立即触发取消。
       response.once('close', onResponseClose);
+
       if (response.destroyed) {
         onResponseClose();
       }
 
-      // 限流器收到取消信号后，会把仍在排队的任务移出队列。
-      // 无论取得位置、队列已满还是等待被取消，都移除响应监听。
-      // 取得位置后不再取消 worker：它必须先结束，工作区才能清理。
-      const release = await this.stitchTaskLimiter
-        .acquire(waitingAbort.signal)
-        .finally(() => {
-          response.off('close', onResponseClose);
-        });
+      let release: (() => void) | null = null;
 
+      try {
+        // 使用排队信号等待执行位置。
+        release = await this.stitchTaskLimiter.acquire(waitingAbort.signal);
+      } catch (error) {
+        // 等待阶段异常时移除连接监听，避免遗留监听器。
+        response.off('close', onResponseClose);
+        throw error;
+      }
       // 执行位置和等待队列都满时，才返回 503。
       if (release === null) {
+        response.off('close', onResponseClose);
         throw new StitchError('BUSY', '当前处理任务较多，请稍后重试');
       }
+
+      // 从这里开始，任务已经占用执行位置。
+      hasExecutionSlot = true;
+
       try {
         // 从这里开始，图片校验和拼接都占用同一个工作位置。
         const checked = await this.stitchesService.validateImages(
@@ -148,15 +169,22 @@ export class StitchesController {
           })),
         );
 
+
+
         // 把已经校验通过的图片路径和工作区路径提交给 worker。
         // 图片处理会在 worker 中执行，控制器等待最终结果。
-        const result = await this.stitchWorkerPool.run({
-          // 保留用户上传顺序，不能重新排序。
-          paths: checked.map((image) => image.path),
+        const result = await this.stitchWorkerPool.run(
+          {
+            // 保留用户上传顺序，不能重新排序。
+            paths: checked.map((image) => image.path),
 
-          // worker 会在这个请求专属目录中生成中间图片。
-          workspaceDirectory: request.uploadWorkspace.directory,
-        });
+            // 使用当前请求专属的临时工作区。
+            workspaceDirectory: request.uploadWorkspace.directory,
+          },
+
+          // 把客户端断线信号传给 Piscina worker。
+          workerAbort.signal,
+        );
 
         // 将完成的 PNG 作为二进制图片返回。
         return new StreamableFile(result.png, {
@@ -176,6 +204,8 @@ export class StitchesController {
           '图片拼接失败，请稍后重试',
         );
       } finally {
+        // 无论成功、失败还是取消，都移除连接监听并释放执行位置。
+        response.off('close', onResponseClose);
         // 成功、校验失败或拼接失败，都会执行这里。
         // 归还的是“并发工作位置”，不是删除上传文件。
         release();
