@@ -11,30 +11,42 @@ import { join } from 'node:path';
 // 引入 Piscina 的类，用来创建 worker 线程池。
 import { Piscina } from 'piscina';
 
-// 引入 worker 接收的数据类型。
-import type { StitchWorkerInput } from './image.worker.js';
+// 引入 worker 接收的数据类型和返回结果类型。
+import type {
+  StitchWorkerInput,
+  StitchWorkerOutput,
+} from './image.worker.js';
 
 // 引入 worker 返回的图片拼接结果类型。
 import type { StitchResult } from './stitch-images.js';
+
+// 引入业务错误类。
+// 主线程收到 worker 的错误对象后，需要重新创建 StitchError。
+import { StitchError } from './stitch.error.js';
 
 
 @Injectable()
 export class StitchWorkerPool implements OnModuleDestroy {
   // 保存一个可重复使用的 Piscina 实例。
   // 不应该每个 HTTP 请求都重新创建一个线程池。
-  private readonly pool: Piscina<StitchWorkerInput, StitchResult>;
+  // Piscina 返回的是 worker 的成功或失败结果对象。
+  private readonly pool: Piscina<
+    StitchWorkerInput,
+    StitchWorkerOutput
+  >;
   constructor() {
-    // 创建 worker 线程池。
-    this.pool = new Piscina<StitchWorkerInput, StitchResult>({
-      // Piscina 运行的是构建后的 JavaScript 文件。
-      // 因此运行测试或启动服务前，需要先执行 npm run build。
+    // 创建支持 worker 成功和失败结果的线程池。
+    this.pool = new Piscina<
+      StitchWorkerInput,
+      StitchWorkerOutput
+    >({
+      // Piscina 运行构建后的 JavaScript worker 文件。
       filename: join(
         process.cwd(),
         'dist/stitches/image.worker.js',
       ),
 
-      // 暂时最多使用两个 worker，
-      // 与现有 StitchTaskLimiter 的两个处理位置保持一致。
+      // 与现有两个并发处理位置保持一致。
       maxThreads: 2,
     });
   }
@@ -45,10 +57,30 @@ export class StitchWorkerPool implements OnModuleDestroy {
    * @param input 图片路径和临时工作区路径。
    * @returns worker 返回的 PNG 和拼接结果信息。
    */
-  run(input: StitchWorkerInput): Promise<StitchResult> {
-    // 将任务交给 Piscina。
-    // 这里不会阻塞主线程等待计算过程。
-    return this.pool.run(input);
+  run(
+    input: StitchWorkerInput,
+  ): Promise<StitchResult> {
+    return this.runWorker(input);
+  }
+
+  // 单独处理 worker 返回结果，保持 run() 对控制器返回 StitchResult。
+  private async runWorker(
+    input: StitchWorkerInput,
+  ): Promise<StitchResult> {
+    // 等待 worker 返回成功或失败结果。
+    const output = await this.pool.run(input);
+
+    // worker 成功时，把图片结果交还给控制器。
+    if (output.ok) {
+      return output.result;
+    }
+
+    // worker 失败时，在主线程重新创建 StitchError。
+    // 这样控制器原有的 instanceof StitchError 判断可以继续工作。
+    throw new StitchError(
+      output.error.code,
+      output.error.message,
+    );
   }
 
   async onModuleDestroy(): Promise<void> {

@@ -1,3 +1,14 @@
+/**
+ * Controller
+  ↓ 取得限流位置
+  ↓ 校验上传图片
+  ↓ 提交任务给 StitchWorkerPool
+  ↓ Piscina worker 执行 stitchImages()
+  ↓ 返回 PNG
+  ↓ finally 释放限流位置
+  ↓ 拦截器清理工作区
+ */
+
 // 引入 NestJS 的控制器、请求参数、响应头和拦截器装饰器。
 import {
   Controller, // 控制器装饰器，用来定义控制器类。
@@ -14,8 +25,6 @@ import {
 import { FilesInterceptor } from '@nestjs/platform-express';
 // 引入图片数量限制，确保接口最多接收 5 张图片。
 import { IMAGE_LIMITS } from '../config/image-limits.js';
-// 引入完整的自动拼接流程。
-import { stitchImages } from './stitch-images.js';
 // 引入统一的业务错误类型。
 import { StitchError } from './stitch.error.js';
 // 引入已有的图片校验服务。
@@ -29,6 +38,9 @@ import {
 } from './upload-workspace.interceptor.js';
 // 引入共享的任务限流器，控制同时进行的图片处理数量。
 import { StitchTaskLimiter } from './stitch-task-limiter.js';
+// 引入可复用的 Piscina worker 池服务。
+// 控制器通过它提交图片处理任务，不直接执行耗时计算。
+import { StitchWorkerPool } from './stitch-worker.pool.js';
 
 
 // 控制器前缀是 images，下面的方法路径是 stitch。
@@ -40,6 +52,9 @@ export class StitchesController {
 
     // 负责分配和归还拼接任务的工作位置。
     private readonly stitchTaskLimiter: StitchTaskLimiter,
+
+    // 负责把耗时的图片拼接任务提交给 Piscina worker。
+    private readonly stitchWorkerPool: StitchWorkerPool,
   ) { }
 
   /**
@@ -100,11 +115,15 @@ export class StitchesController {
           })),
         );
 
-        // 按上传顺序处理已经校验通过的图片。
-        const result = await stitchImages(
-          checked.map((image) => image.path),
-          request.uploadWorkspace.directory,
-        );
+        // 把已经校验通过的图片路径和工作区路径提交给 worker。
+        // 图片处理会在 worker 中执行，控制器等待最终结果。
+        const result = await this.stitchWorkerPool.run({
+          // 保留用户上传顺序，不能重新排序。
+          paths: checked.map((image) => image.path),
+
+          // worker 会在这个请求专属目录中生成中间图片。
+          workspaceDirectory: request.uploadWorkspace.directory,
+        });
 
         // 将完成的 PNG 作为二进制图片返回。
         return new StreamableFile(result.png, {
