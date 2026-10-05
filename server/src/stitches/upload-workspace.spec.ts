@@ -79,4 +79,37 @@ describe('上传临时目录', () => {
       });
     }
   });
+
+  it('删除连续失败三次时抛出最后一次异常', async () => {
+    let attempts = 0;
+
+    const firstError = new Error('第一次删除失败');
+    const secondError = new Error('第二次删除失败');
+    const lastError = new Error('第三次删除失败');
+
+    // 模拟删除连续失败三次，验证清理逻辑不会无限重试。
+    const removeDirectory = vi.fn<RemoveUploadWorkspace>(async () => {
+      attempts += 1;
+
+      if (attempts === 1) throw firstError;
+      if (attempts === 2) throw secondError;
+      throw lastError;
+    });
+
+    const workspace = await createUploadWorkspace({ removeDirectory });
+
+    try {
+      // 三次都失败后，应抛出最后一次删除异常。
+      await expect(workspace.cleanup()).rejects.toBe(lastError);
+
+      // 最多只能尝试三次。
+      expect(removeDirectory).toHaveBeenCalledTimes(3);
+    } finally {
+      // 模拟删除函数不会真正删除目录，因此测试结束时用真实 rm 清理。
+      await removeDirectoryOnTestEnd(workspace.directory, {
+        recursive: true,
+        force: true,
+      });
+    }
+  });
 })
