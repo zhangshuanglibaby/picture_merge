@@ -25,15 +25,16 @@ import {
   it,
 } from 'vitest';
 
-// 只引入类型，不会在运行时重复加载 worker。
+// 引入 worker 接收的数据类型和返回结果类型。
 import type {
   StitchWorkerInput,
+  StitchWorkerOutput,
 } from '../src/stitches/image.worker.js';
 
 // 引入图片拼接结果的类型。
-import type {
-  StitchResult,
-} from '../src/stitches/stitch-images.js';
+// import type {
+//   StitchResult,
+// } from '../src/stitches/stitch-images.js';
 
 // 找到已有的两张重叠测试图片。
 const firstImage = join(
@@ -46,15 +47,15 @@ const secondImage = join(
 );
 
 // 定义 Piscina 实例。
-// 输入类型是 StitchWorkerInput，返回类型是 StitchResult。
-let pool: Piscina<StitchWorkerInput, StitchResult>;
+// worker 返回的是带 ok 标记的成功或失败对象。
+let pool: Piscina<StitchWorkerInput, StitchWorkerOutput>;
 
 
 describe('Piscina 图片拼接 worker', () => {
   beforeAll(() => {
     // 创建一个只使用一个 worker 的线程池。
     // 当前只验证“图片处理能否进入 worker”，不测试并发数量。
-    pool = new Piscina<StitchWorkerInput, StitchResult>({
+    pool = new Piscina<StitchWorkerInput, StitchWorkerOutput>({
       // Piscina 必须加载构建后的 JavaScript worker 文件。
       filename: join(
         process.cwd(),
@@ -80,16 +81,26 @@ describe('Piscina 图片拼接 worker', () => {
 
     try {
       // 把图片路径和工作区路径提交给 worker。
-      const result = await pool.run({
+      const workerOutput = await pool.run({
         paths: [firstImage, secondImage],
         workspaceDirectory,
       });
 
+      // 先确认 worker 返回的是成功结构。
+      // TypeScript 看到 ok 为 true 后，才能安全读取 result。
+      expect(workerOutput.ok).toBe(true);
+
+      if (!workerOutput.ok) {
+        throw new Error(workerOutput.error.message);
+      }
+
+
       // 确认 worker 确实返回了有内容的 PNG 数据。
-      expect(result.png.length).toBeGreaterThan(0);
+      expect(workerOutput.result.png.length).toBeGreaterThan(0);
 
       // 解析 worker 返回的 PNG，确认它是可读取的图片。
-      const metadata = await sharp(result.png).metadata();
+      const metadata = await sharp(workerOutput.result.png).metadata();
+
 
       // 两张 overlap 测试图片应拼成 240 × 540。
       expect(metadata.width).toBe(240);
