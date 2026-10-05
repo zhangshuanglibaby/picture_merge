@@ -12,6 +12,8 @@ import type { Server } from 'node:http';
 import sharp from 'sharp';
 // 引入 NestJS 应用类型，保存测试期间创建的应用。
 import type { INestApplication } from '@nestjs/common';
+// 监听 Nest 的错误日志，检查预期的断线取消是否被误记为服务端错误。
+import { Logger } from '@nestjs/common';
 // 引入 NestJS 测试工具，用真实模块创建测试应用。
 import { Test } from '@nestjs/testing';
 // 引入 HTTP 测试工具，向测试应用发送 multipart 上传请求。
@@ -617,6 +619,9 @@ describe('POST /images/stitch', () => {
       .attach('images', firstImage)
       .attach('images', secondImage);
 
+    // 只记录本测试期间的错误日志；不改变 Logger 原本的输出行为。
+    const errorSpy = vi.spyOn(Logger.prototype, 'error');
+
     // 提前接住客户端主动断开产生的错误，避免未处理的 Promise 拒绝。
     const requestSettled = queuedRequest.then(
       () => undefined,
@@ -657,6 +662,16 @@ describe('POST /images/stitch', () => {
         // 返回本次创建、但仍留在磁盘上的目录。
         return createdWorkspaces.filter((name) => current.has(name));
       }, { interval: 10, timeout: 2_000 }).toEqual([]);
+
+      // 等一个事件循环轮次，让服务端完成清理之后的异常处理。
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      // 断线取消属于预期行为，不应作为未知服务端错误记录。
+      const loggedAbortError = errorSpy.mock.calls.some(
+        ([message]) =>
+          message instanceof DOMException && message.name === 'AbortError',
+      );
+      expect(loggedAbortError).toBe(false);
     } finally {
       // 即使断言失败，也归还位置，避免测试结束后留下排队任务。
       queuedRequest.abort();
@@ -673,6 +688,8 @@ describe('POST /images/stitch', () => {
       ) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
+      // 恢复原始日志方法，避免影响其他测试。
+      errorSpy.mockRestore();
     }
   }, 10_000);
 

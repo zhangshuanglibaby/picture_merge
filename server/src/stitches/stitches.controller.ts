@@ -20,6 +20,7 @@ import {
   HttpStatus, // HTTP 状态码枚举，包含所有 HTTP 状态码。
   StreamableFile, // NestJS 专门用于返回图片、PDF 等二进制文件的类型。
   Res, // 取得 HTTP 响应对象，用于识别排队期间客户端提前断开。
+  UseFilters // 为当前接口安装异常过滤器
 } from '@nestjs/common';
 // Express 响应对象的类型；只用于 TypeScript 检查，不会产生运行时代码。
 import type { Response } from 'express';
@@ -44,6 +45,8 @@ import { StitchTaskLimiter } from './stitch-task-limiter.js';
 // 引入可复用的 Piscina worker 池服务。
 // 控制器通过它提交图片处理任务，不直接执行耗时计算。
 import { StitchWorkerPool } from './stitch-worker.pool.js';
+// 仅处理当前拼接接口中“连接已关闭”的排队取消。
+import { DisconnectedWaitFilter } from './disconnected-wait.filter.js';
 
 
 // 控制器前缀是 images，下面的方法路径是 stitch。
@@ -69,6 +72,8 @@ export class StitchesController {
    */
 
   @Post('stitch')
+  // 只给这个接口过滤预期的断线取消，不影响其他接口。
+  @UseFilters(DisconnectedWaitFilter)
   // POST 请求成功时固定返回 200。
   @HttpCode(HttpStatus.OK)
   @UseInterceptors(
