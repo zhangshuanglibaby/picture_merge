@@ -1,13 +1,13 @@
 // 引入 NestJS 的控制器、请求参数、响应头和拦截器装饰器。
 import {
   Controller, // 控制器装饰器，用来定义控制器类。
-  Header, // 响应头装饰器，用来设置 HTTP 响应头。
   Post, // 路由装饰器，用来定义 POST 请求的路径。
   Req, // 请求参数装饰器，用来读取 HTTP 请求对象。
   UploadedFiles, // 上传文件装饰器，用来读取上传的文件。  
   UseInterceptors, // 拦截器装饰器，用来定义拦截器。
   HttpCode, // 状态码装饰器，用来指定接口成功时返回的 HTTP 状态码。
   HttpStatus, // HTTP 状态码枚举，包含所有 HTTP 状态码。
+  StreamableFile, // NestJS 专门用于返回图片、PDF 等二进制文件的类型。
 } from '@nestjs/common';
 
 // 引入处理多个上传文件的 Multer 拦截器。
@@ -47,14 +47,7 @@ export class StitchesController {
 
   @Post('stitch')
   // POST 请求成功时固定返回 200。
-  @HttpCode(HttpStatus.OK) 
-  // 告诉浏览器：接口返回的是 PNG 图片。
-  @Header('Content-Type', 'image/png')
-  // 让浏览器可以直接预览生成的图片。
-  @Header(
-    'Content-Disposition',
-    'inline; filename="stitched.png"',
-  )
+  @HttpCode(HttpStatus.OK)
   @UseInterceptors(
     // 先创建临时工作目录。
     UploadWorkspaceInterceptor,
@@ -72,7 +65,7 @@ export class StitchesController {
 
     // 读取字段名为 images 的所有上传文件。
     @UploadedFiles() files: Express.Multer.File[],
-  ): Promise<Buffer> {
+  ): Promise<StreamableFile> {
     // 先执行数量、文件大小、真实图片格式和图片尺寸校验。
     const checked = await this.stitchesService.validateImages(
       files.map((file) => ({
@@ -99,8 +92,17 @@ export class StitchesController {
         request.uploadWorkspace.directory,
       );
 
-      // 直接把 PNG 二进制数据作为 HTTP 响应返回。
-      return result.png;
+      // 使用 StreamableFile 返回二进制 PNG，防止 NestJS 把 Buffer 序列化成 JSON。
+      return new StreamableFile(result.png, {
+        // 告诉浏览器返回的是 PNG 图片。
+        type: 'image/png',
+
+        // 告诉浏览器直接显示图片，而不是下载文件。
+        disposition: 'inline; filename="stitched.png"',
+
+        // 告诉客户端图片二进制数据的字节长度。
+        length: result.png.length,
+      });
     } catch {
       // 将图像处理阶段的普通错误转换成统一业务错误。
       throw new StitchError(
