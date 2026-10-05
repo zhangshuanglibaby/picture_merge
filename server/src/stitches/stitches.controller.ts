@@ -27,14 +27,19 @@ import {
   UploadWorkspaceInterceptor,
   type UploadRequest,
 } from './upload-workspace.interceptor.js';
+// 引入共享的任务限流器，控制同时进行的图片处理数量。
+import { StitchTaskLimiter } from './stitch-task-limiter.js';
 
 
 // 控制器前缀是 images，下面的方法路径是 stitch。
 @Controller('images')
 export class StitchesController {
-  // 注入图片校验服务。
+  // 负责校验上传图片。
   constructor(
     private readonly stitchesService: StitchesService,
+
+    // 负责分配和归还拼接任务的工作位置。
+    private readonly stitchTaskLimiter: StitchTaskLimiter,
   ) { }
 
   /**
@@ -66,54 +71,63 @@ export class StitchesController {
     // 读取字段名为 images 的所有上传文件。
     @UploadedFiles() files: Express.Multer.File[],
   ): Promise<StreamableFile> {
-    // 先执行数量、文件大小、真实图片格式和图片尺寸校验。
-    const checked = await this.stitchesService.validateImages(
-      files.map((file) => ({
-        // 传入服务器临时目录中的真实文件路径。
-        path: file.path,
-
-        // 传入 Multer 记录的文件字节数。
-        size: file.size,
-      })),
-    );
-
-    // 如果临时目录没有成功创建，无法继续处理图片。
-    if (!request.uploadWorkspace) {
-      throw new StitchError(
-        'PROCESSING_FAILED',
-        '无法创建图片处理临时目录',
-      );
-    }
-
-    try {
-      // 只传入校验成功后的图片路径。
-      const result = await stitchImages(
-        checked.map((image) => image.path),
-        request.uploadWorkspace.directory,
-      );
-
-      // 使用 StreamableFile 返回二进制 PNG，防止 NestJS 把 Buffer 序列化成 JSON。
-      return new StreamableFile(result.png, {
-        // 告诉浏览器返回的是 PNG 图片。
-        type: 'image/png',
-
-        // 告诉浏览器直接显示图片，而不是下载文件。
-        disposition: 'inline; filename="stitched.png"',
-
-        // 告诉客户端图片二进制数据的字节长度。
-        length: result.png.length,
-      });
-    } catch (error) {
-      // 如果是已经明确分类的业务错误，就原样抛出，保留其错误码和状态码。
-      if (error instanceof StitchError) {
-        throw error;
+    {
+      // 如果临时目录没有创建成功，就不能继续使用上传文件。
+      if (!request.uploadWorkspace) {
+        throw new StitchError(
+          'PROCESSING_FAILED',
+          '无法创建图片处理临时目录',
+        );
       }
 
-      // 只有未预料到的处理异常，才统一归类为服务器处理失败。
-      throw new StitchError(
-        'PROCESSING_FAILED',
-        '图片拼接失败，请稍后重试',
-      );
+      // 尝试取得一个工作位置；已满时得到 null。
+      const release = this.stitchTaskLimiter.tryAcquire();
+
+      // 没有位置就立即返回 503，错误码为 BUSY。
+      if (release === null) {
+        throw new StitchError('BUSY', '当前处理任务较多，请稍后重试');
+      }
+
+      try {
+        // 从这里开始，图片校验和拼接都占用同一个工作位置。
+        const checked = await this.stitchesService.validateImages(
+          files.map((file) => ({
+            // Multer 保存图片后的临时文件路径。
+            path: file.path,
+
+            // Multer 记录的文件大小，单位是字节。
+            size: file.size,
+          })),
+        );
+
+        // 按上传顺序处理已经校验通过的图片。
+        const result = await stitchImages(
+          checked.map((image) => image.path),
+          request.uploadWorkspace.directory,
+        );
+
+        // 将完成的 PNG 作为二进制图片返回。
+        return new StreamableFile(result.png, {
+          type: 'image/png',
+          disposition: 'inline; filename="stitched.png"',
+          length: result.png.length,
+        });
+      } catch (error) {
+        // 已有的业务错误（例如图片无效、输出过大）保留原错误码。
+        if (error instanceof StitchError) {
+          throw error;
+        }
+
+        // 其他意外错误统一转换为处理失败。
+        throw new StitchError(
+          'PROCESSING_FAILED',
+          '图片拼接失败，请稍后重试',
+        );
+      } finally {
+        // 成功、校验失败或拼接失败，都会执行这里。
+        // 归还的是“并发工作位置”，不是删除上传文件。
+        release();
+      }
     }
   }
 }
