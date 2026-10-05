@@ -18,4 +18,21 @@ describe('StitchError', () => {
 
     expect(error.getStatus()).toBe(503);
   });
+
+  it('图片处理超时返回 504 和专用错误码', () => {
+    // 创建一个图片处理超时异常。
+    const error = new StitchError(
+      'PROCESSING_TIMEOUT',
+      '图片处理超时，请稍后重试',
+    );
+
+    // 504 表示服务端等待上游处理超时。
+    expect(error.getStatus()).toBe(504);
+
+    // 检查前端可识别的错误码和提示。
+    expect(error.getResponse()).toEqual({
+      code: 'PROCESSING_TIMEOUT',
+      message: '图片处理超时，请稍后重试',
+    });
+  });
 });

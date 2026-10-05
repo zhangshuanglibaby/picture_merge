@@ -16,6 +16,7 @@ const STATUS_BY_CODE = {
   OUTPUT_TOO_LARGE: HttpStatus.UNPROCESSABLE_ENTITY, // 拼接结果超出处理范围。
   BUSY: HttpStatus.SERVICE_UNAVAILABLE,            // 当前处理任务已满。
   PROCESSING_FAILED: HttpStatus.INTERNAL_SERVER_ERROR, // 实际处理失败。
+  PROCESSING_TIMEOUT: HttpStatus.GATEWAY_TIMEOUT, // worker 执行超过时间限制。
 } as const;
 
 // 从上面的清单生成类型，避免在其他文件里拼错错误码。

@@ -214,8 +214,9 @@ export class StitchesController {
           error instanceof Error &&
           error.name === 'AbortError'
         ) {
+          // 使用专用错误码，让前端知道这是超时，可以考虑重试。
           throw new StitchError(
-            'PROCESSING_FAILED',
+            'PROCESSING_TIMEOUT',
             '图片处理超时，请稍后重试',
           );
         }
