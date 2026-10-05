@@ -42,3 +42,29 @@ it('拒绝裁掉第二张全部内容', async () => {
     ),
   ).rejects.toThrow('裁切计划中的行数无效');
 });
+
+it('裁掉第二张顶部 100 行后，完整保留其余 220 行', async () => {
+  // 两张样例图片各高 320 行，第二张的顶部 100 行与第一张底部重叠。
+  const first = fixture('overlap-1.png');
+  const second = fixture('overlap-2.png');
+
+  // 生成拼图：第一张不裁，第二张裁掉顶部 100 行。
+  const output = await renderStitch([first, second], [0, 100]);
+
+  // 从拼图第 320 行开始，取出第二张应该留下的全部 220 行。
+  const actual = await sharp(output)
+    .extract({ left: 0, top: 320, width: 240, height: 220 })
+    .removeAlpha()
+    .raw()
+    .toBuffer();
+
+  // 从第二张原图第 100 行开始，取出理论上应该保留的 220 行。
+  const expected = await sharp(second)
+    .extract({ left: 0, top: 100, width: 240, height: 220 })
+    .removeAlpha()
+    .raw()
+    .toBuffer();
+
+  // 逐字节比较整块图片，确认后半张没有被遗漏或变成白底。
+  expect(actual.equals(expected)).toBe(true);
+});

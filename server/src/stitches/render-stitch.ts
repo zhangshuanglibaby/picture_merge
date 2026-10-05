@@ -98,7 +98,7 @@ export async function renderStitch(
         left: 0, // 左上角坐标。
         top: crop, // 顶部要裁掉的行数。
         width: size.width, // 宽度。
-        height: size.height - crop, // 高度。
+        height: size.height, // 高度。
       })
       .flatten({ background: '#ffffff' }) // 把透明区域铺成白色。
       .png() // 转换为 PNG 格式。
@@ -107,7 +107,7 @@ export async function renderStitch(
     // 记录这一层图片内容，以及它在最终画布上的起始高度。
     layers.push({ input, left: 0, top: nextTop });
     // 累加下一层图片的起始高度。
-    nextTop += size.height - crop;
+    nextTop += size.height;
   }
 
   // 创建白底画布，一次合成所有图层，最后输出一张 PNG。
