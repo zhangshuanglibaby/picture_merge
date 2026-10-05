@@ -591,4 +591,57 @@ describe('POST /images/stitch', () => {
       ]);
     }
   }, 30_000);
+  it('排队请求断开后从等待队列移除', async () => {
+    // 使用 Controller 正在使用的同一个限流器，先占满两个执行位置。
+    const limiter = app.get(StitchTaskLimiter);
+    const releaseFirst = limiter.tryAcquire();
+    const releaseSecond = limiter.tryAcquire();
+
+    // 创建上传请求；调用 then() 后，请求才真正开始发送。
+    const queuedRequest = request(app.getHttpServer())
+      .post('/images/stitch')
+      .attach('images', firstImage)
+      .attach('images', secondImage);
+
+    // 提前接住客户端主动断开产生的错误，避免未处理的 Promise 拒绝。
+    const requestSettled = queuedRequest.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    try {
+      // 确认 HTTP 请求确实进入了等待队列。
+      await waitForWaitingCount(limiter, 1);
+
+      // 模拟客户端在排队期间断开连接。
+      queuedRequest.abort();
+      await requestSettled;
+
+      // 给服务端一点时间处理断开事件，但最多等 1 秒。
+      const deadline = Date.now() + 1_000;
+      while (limiter.getWaitingCount() !== 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+
+      // 正确行为：等待任务被移除；两个预占的位置仍在使用。
+      expect(limiter.getWaitingCount()).toBe(0);
+      expect(limiter.getActiveCount()).toBe(2);
+    } finally {
+      // 即使断言失败，也归还位置，避免测试结束后留下排队任务。
+      queuedRequest.abort();
+      releaseFirst?.();
+      releaseSecond?.();
+      await requestSettled;
+
+      // 等服务端收尾，避免影响其他测试；最多等待 5 秒。
+      const deadline = Date.now() + 5_000;
+      while (
+        (limiter.getActiveCount() !== 0 ||
+          limiter.getWaitingCount() !== 0) &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+  }, 10_000);
 });
