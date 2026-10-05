@@ -6,6 +6,8 @@
 import sharp from 'sharp';
 // 引入现有的图片数量、输入像素和输出尺寸限制。
 import { IMAGE_LIMITS } from '../config/image-limits.js';
+// 引入项目已有的业务异常类，用于返回明确的错误码和 HTTP 状态码。
+import { StitchError } from './stitch.error.js';
 
 /**
  * 按顺序拼接 2～5 张图片。
@@ -77,7 +79,8 @@ export async function renderStitch(
       outputHeight > IMAGE_LIMITS.maxOutputHeight ||
       outputWidth * outputHeight > IMAGE_LIMITS.maxOutputPixels
     ) {
-      throw new Error('输出图片超过尺寸限制');
+      // 图片还没开始合成；直接告诉调用方：成品超出了允许范围。
+      throw new StitchError('OUTPUT_TOO_LARGE', '拼接结果超出处理范围');
     }
   }
 

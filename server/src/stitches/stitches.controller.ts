@@ -103,8 +103,13 @@ export class StitchesController {
         // 告诉客户端图片二进制数据的字节长度。
         length: result.png.length,
       });
-    } catch {
-      // 将图像处理阶段的普通错误转换成统一业务错误。
+    } catch (error) {
+      // 如果是已经明确分类的业务错误，就原样抛出，保留其错误码和状态码。
+      if (error instanceof StitchError) {
+        throw error;
+      }
+
+      // 只有未预料到的处理异常，才统一归类为服务器处理失败。
       throw new StitchError(
         'PROCESSING_FAILED',
         '图片拼接失败，请稍后重试',

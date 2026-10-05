@@ -6,6 +6,10 @@ import sharp from 'sharp';
 import { expect, it } from 'vitest';
 // 引入本步创建的多图拼接函数。
 import { renderStitch } from './render-stitch.js';
+// 引入项目已有的临时目录工具，让测试生成的图片在结束后被删除。
+import { createUploadWorkspace } from './upload-workspace.js';
+// 引入项目的尺寸限制，避免在测试里另写一套上限数字。
+import { IMAGE_LIMITS } from '../config/image-limits.js';
 
 const fixture = (name: string) =>
   join(process.cwd(), 'test', 'fixtures', name);
@@ -67,4 +71,37 @@ it('裁掉第二张顶部 100 行后，完整保留其余 220 行', async () => 
 
   // 逐字节比较整块图片，确认后半张没有被遗漏或变成白底。
   expect(actual.equals(expected)).toBe(true);
+});
+it('拼接结果超过最大高度时返回 OUTPUT_TOO_LARGE', async () => {
+  // 为本次测试创建独立临时目录，避免图片留在项目里。
+  const workspace = await createUploadWorkspace();
+
+  try {
+    // 两张图各占最大输出高度的一半再多一行；
+    // 单张合法，但两张竖向拼在一起一定超出输出高度上限。
+    const singleHeight = Math.floor(IMAGE_LIMITS.maxOutputHeight / 2) + 1;
+    const imagePath = join(workspace.directory, 'tall.png');
+
+    // 生成一张仅 1 像素宽的 PNG，测试高度限制而不消耗大量内存。
+    await sharp({
+      create: {
+        width: 1,
+        height: singleHeight,
+        channels: 3,
+        background: '#ffffff',
+      },
+    }).png().toFile(imagePath);
+
+    // 两次使用这张图片，均不裁切：合成高度超过允许上限。
+    // 检查抛出的业务错误是 422，且错误码正确。
+    await expect(
+      renderStitch([imagePath, imagePath], [0, 0]),
+    ).rejects.toMatchObject({
+      status: 422,
+      response: { code: 'OUTPUT_TOO_LARGE' },
+    });
+  } finally {
+    // 无论断言通过还是失败，都清理这次创建的临时图片。
+    await workspace.cleanup();
+  }
 });
