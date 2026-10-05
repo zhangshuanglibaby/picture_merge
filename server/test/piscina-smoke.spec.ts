@@ -1,4 +1,4 @@
-// 引入 Node.js 路径工具，用来定位构建后的 worker 文件。
+// 引入 Node.js 路径工具，用来定位测试专用 worker 文件。
 import { join } from 'node:path';
 
 // 引入 Piscina 类，用来创建 worker 线程池。
@@ -31,10 +31,11 @@ describe('Piscina 最小 worker 通信', () => {
     // 创建一个只使用一个 worker 的线程池。
     // 当前只是验证通信链路，不测试并发数量。
     pool = new Piscina<AdditionInput, number>({
-      // Piscina 需要加载构建后的 JavaScript 文件。
+      // 这个测试只验证最小通信，因此使用测试专用的加法 worker。
+      // 生产图片 worker 需要 paths 和 workspaceDirectory，不能接收 left/right。
       filename: join(
         process.cwd(),
-        'dist/stitches/image.worker.js',
+        'test/fixtures/addition.worker.mjs',
       ),
 
       // 测试只启动一个 worker，结果更容易理解。
