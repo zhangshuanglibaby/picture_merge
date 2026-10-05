@@ -62,18 +62,23 @@ export class StitchWorkerPool implements OnModuleDestroy {
    * @param input 图片路径和临时工作区路径。
    * @returns worker 返回的 PNG 和拼接结果信息。
    */
+  // 向 worker 提交图片任务，并允许调用方传入取消信号。
+  // 这里不新增 import，因为 AbortSignal 是 Node.js 全局类型。
   run(
     input: StitchWorkerInput,
+    signal?: AbortSignal,
   ): Promise<StitchResult> {
-    return this.runWorker(input);
+    return this.runWorker(input, signal);
   }
 
   // 单独处理 worker 返回结果，保持 run() 对控制器返回 StitchResult。
   private async runWorker(
     input: StitchWorkerInput,
+    signal?: AbortSignal,
   ): Promise<StitchResult> {
-    // 等待 worker 返回成功或失败结果。
-    const output = await this.pool.run(input);
+    // signal 触发 abort 时，Piscina 会取消排队任务，
+    // 如果任务已经运行，则终止对应的 worker 线程。
+    const output = await this.pool.run(input, { signal });
 
     // worker 成功时，把图片结果交还给控制器。
     if (output.ok) {
