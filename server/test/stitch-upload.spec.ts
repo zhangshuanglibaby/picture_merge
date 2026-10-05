@@ -1,5 +1,9 @@
 // 引入 Node.js 路径工具，拼出测试图片的绝对路径。
 import { join } from 'node:path';
+// Node.js 的异步文件工具：读取系统临时目录下有哪些文件夹。
+import { readdir } from 'node:fs/promises';
+// Node.js 的系统工具：找到当前电脑用于存放临时文件的目录。
+import { tmpdir } from 'node:os';
 // 引入 Sharp，用来读取接口返回的 PNG 尺寸。
 import sharp from 'sharp';
 // 引入 NestJS 应用类型，保存测试期间创建的应用。
@@ -174,11 +178,20 @@ describe('POST /images/stitch', () => {
     });
   }, 30_000);
 
-  it('上传六张图片时拒绝请求', async () => {
+  it('上传六张图片时拒绝请求，并清理临时目录', async () => {
+    // 记录请求开始前，系统临时目录中已有的本项目工作目录。
+    // Set 是一个集合，方便稍后判断某个目录是否原本就存在。
+    const before = new Set(
+      (await readdir(tmpdir())).filter((name) =>
+        name.startsWith('image-stitch-'),
+      ),
+    );
+
     // images 是接口约定的上传字段名。
     // 六次上传同一张有效图片即可测试“数量上限”；
     // 这里不需要准备六张内容不同的图片。
     // 保存实际响应，供下面查看响应头和响应体。
+    // 前五张可能已经保存到磁盘；上传第六张时，Multer 会拒绝请求。
     const response = await request(app.getHttpServer())
       .post('/images/stitch')
       .attach('images', firstImage)
@@ -188,32 +201,54 @@ describe('POST /images/stitch', () => {
       .attach('images', firstImage)
       .attach('images', firstImage)
       .expect(400);
-    // 六张超出了允许的 2～5 张；前端应能通过 code 识别这个错误。
+    // 确认返回给前端的仍然是约定好的业务错误。
     expect(response.body).toMatchObject({
       code: 'INVALID_COUNT',
       message: '请选择 2～5 张图片',
     });
+
+    // 请求结束后再次查看临时目录，只挑出“这次请求之后新出现”的目录。
+    const after = (await readdir(tmpdir())).filter(
+      (name) => name.startsWith('image-stitch-') && !before.has(name),
+    );
+    // 即使上传在进入 Controller 之前就失败，也不能留下新目录。
+    expect(after).toEqual([]);
   });
 
   it('单张图片超过上传大小上限时返回明确错误码', async () => {
-    // 比单张文件上限多创建 1 字节，精确测试“超过上限”的情况。
-    // Buffer 是 Node.js 的二进制数据容器；这里不必生成真实图片，
-    // 因为文件应该在上传阶段就被拒绝，不会进入图片解码步骤。
+    // 上传前记录本项目已经存在的临时目录。
+    // Set 方便我们稍后区分“原本就有”和“本次请求新增”的目录。
+    const before = new Set(
+      (await readdir(tmpdir())).filter((name) =>
+        name.startsWith('image-stitch-'),
+      ),
+    );
+
+    // 创建比单张上传上限多 1 字节的数据。
+    // 这里不需要真实图片，因为超限文件应在上传阶段被拒绝。
     const oversizedFile = Buffer.alloc(IMAGE_LIMITS.maxFileBytes + 1);
 
-    // 第一张使用已有的有效图片，第二张使用刚创建的超限文件。
-    // 给二进制数据指定文件名，供 multipart 上传使用。
+    // 先上传有效图片，再上传超限文件：
+    // 这样可以检查前一张已上传的图片是否也被清理。
     const response = await request(app.getHttpServer())
       .post('/images/stitch')
       .attach('images', firstImage)
       .attach('images', oversizedFile, 'oversized.png')
       .expect(413);
 
-    // 除了 HTTP 状态码，前端还需要通过业务 code 判断出错原因。
+    // 确认前端收到的是约定好的“单张图片过大”错误。
     expect(response.body).toMatchObject({
       code: 'IMAGE_TOO_LARGE',
       message: '单张图片过大',
     });
+
+    // 请求结束后，只寻找本次请求新增且仍然存在的工作目录。
+    const leftovers = (await readdir(tmpdir())).filter(
+      (name) => name.startsWith('image-stitch-') && !before.has(name),
+    );
+
+    // 不应留下原图，也不应留下本次请求的临时目录。
+    expect(leftovers).toEqual([]);
   }, 30_000);
 
   it('上传字段名不是 images 时返回明确错误码', async () => {
@@ -224,7 +259,7 @@ describe('POST /images/stitch', () => {
       .attach('photos', firstImage)
       .attach('photos', secondImage)
       .expect(400);
-  
+
     // 前端需要通过 code 识别错误，而不只依赖 HTTP 400。
     expect(response.body).toMatchObject({
       code: 'INVALID_COUNT',
