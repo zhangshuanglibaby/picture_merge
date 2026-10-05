@@ -17,11 +17,15 @@ export class DisconnectedWaitFilter extends BaseExceptionFilter {
 
     // 仅忽略“客户端已断开”时，限流器产生的排队取消异常。
     // 此时无法再向客户端发送响应，但工作区仍由外层拦截器清理。
-    if (
-      response.destroyed &&
+    // 排队取消和运行中取消都属于客户端已断开后的预期取消。
+    const isExpectedCancellation =
       exception.name === 'AbortError' &&
-      exception.message === '等待任务已取消'
-    ) {
+      (
+        exception.message === '等待任务已取消' ||
+        exception.message === '正在运行的任务已取消'
+      );
+
+    if (response.destroyed && isExpectedCancellation) {
       return;
     }
     // 其他 DOMException 交还 Nest 原有逻辑，不能一概吞掉。

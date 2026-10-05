@@ -193,6 +193,18 @@ export class StitchesController {
           length: result.png.length,
         });
       } catch (error) {
+        // 客户端断开导致 Piscina 取消 worker 时，统一转换成项目自己的取消异常。
+        if (
+          workerAbort.signal.aborted &&
+          error instanceof Error &&
+          error.name === 'AbortError'
+        ) {
+          throw new DOMException(
+            '正在运行的任务已取消',
+            'AbortError',
+          );
+        }
+
         // 已有的业务错误（例如图片无效、输出过大）保留原错误码。
         if (error instanceof StitchError) {
           throw error;

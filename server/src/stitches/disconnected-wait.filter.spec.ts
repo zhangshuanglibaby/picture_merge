@@ -53,4 +53,37 @@ describe('DisconnectedWaitFilter', () => {
       parentCatch.mockRestore();
     }
   });
+
+  it('连接已断开时，会吞掉运行中 worker 的预期取消异常', () => {
+    // 监视 Nest 默认过滤器，确认预期取消不会继续记录错误。
+    const parentCatch = vi
+      .spyOn(BaseExceptionFilter.prototype, 'catch')
+      .mockImplementation(() => undefined);
+
+    const filter = new DisconnectedWaitFilter();
+
+    // destroyed 为 true，表示客户端连接已经断开。
+    const response = { destroyed: true } as Response;
+
+    const host = {
+      switchToHttp: () => ({
+        getResponse: () => response,
+      }),
+    } as unknown as ArgumentsHost;
+
+    // 模拟 Piscina 取消异常被 Controller 转换后的异常。
+    const exception = new DOMException(
+      '正在运行的任务已取消',
+      'AbortError',
+    );
+
+    try {
+      filter.catch(exception, host);
+
+      // 预期取消不应交给 Nest 默认异常处理器。
+      expect(parentCatch).not.toHaveBeenCalled();
+    } finally {
+      parentCatch.mockRestore();
+    }
+  });
 });
