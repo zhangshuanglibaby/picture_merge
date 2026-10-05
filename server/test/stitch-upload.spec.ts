@@ -853,4 +853,65 @@ describe('POST /images/stitch', () => {
       workerSpy.mockRestore();
     }
   }, 10_000);
+
+  it('worker 异常退出后释放资源，并恢复后续请求', async () => {
+    // 记录测试前已有的临时工作区。
+    const before = new Set(
+      (await readdir(tmpdir())).filter((name) =>
+        name.startsWith('image-stitch-'),
+      ),
+    );
+
+    const limiter = app.get(StitchTaskLimiter);
+    const workerPool = app.get(StitchWorkerPool);
+
+    // 模拟 StitchWorkerPool 收到 worker 意外退出异常。
+    const workerSpy = vi.spyOn(workerPool, 'run')
+      .mockRejectedValueOnce(
+        new Error('worker exited unexpectedly'),
+      );
+
+    try {
+      // 第一个请求应该返回普通处理失败。
+      const failedResponse = await request(app.getHttpServer())
+        .post('/images/stitch')
+        .attach('images', firstImage)
+        .attach('images', secondImage)
+        .expect(500);
+
+      // 未分类的 worker 异常统一映射为 PROCESSING_FAILED。
+      expect(failedResponse.body).toMatchObject({
+        code: 'PROCESSING_FAILED',
+        message: '图片拼接失败，请稍后重试',
+      });
+
+      // Controller finally 应该释放并发执行位置。
+      expect(limiter.getActiveCount()).toBe(0);
+
+      // 上传拦截器应该清理本次请求的工作区。
+      const afterFailure = new Set(
+        (await readdir(tmpdir())).filter((name) =>
+          name.startsWith('image-stitch-'),
+        ),
+      );
+      expect(afterFailure).toEqual(before);
+    } finally {
+      // 恢复真实 worker 方法，让后续恢复请求真正执行图片拼接。
+      workerSpy.mockRestore();
+    }
+
+    // 异常请求结束后，下一次正常请求应该恢复为 200。
+    const recoveredResponse = await request(app.getHttpServer())
+      .post('/images/stitch')
+      .attach('images', firstImage)
+      .attach('images', secondImage)
+      .expect(200);
+
+    // 恢复请求应该返回 PNG。
+    expect(recoveredResponse.headers['content-type'])
+      .toMatch(/image\/png/);
+
+    // 恢复请求完成后也不能残留执行位置。
+    expect(limiter.getActiveCount()).toBe(0);
+  }, 30_000);
 });
