@@ -251,19 +251,35 @@ describe('POST /images/stitch', () => {
     expect(leftovers).toEqual([]);
   }, 30_000);
 
-  it('上传字段名不是 images 时返回明确错误码', async () => {
-    // 故意把约定的 images 写成 photos，模拟前端传错字段名。
-    // 两张图片本身有效，这样测试只针对“字段名错误”。
+  it('上传字段名不是 images 时返回明确错误码，并清理临时目录', async () => {
+    // 记录请求前已有的工作目录。
+    // 稍后只检查“本次请求新产生”的目录，不误判以前的目录。
+    const before = new Set(
+      (await readdir(tmpdir())).filter((name) =>
+        name.startsWith('image-stitch-'),
+      ),
+    );
+
+    // 第一张使用正确字段 images，允许它先写入临时目录。
+    // 第二张故意使用错误字段 photos，让上传过程在中途失败。
     const response = await request(app.getHttpServer())
       .post('/images/stitch')
-      .attach('photos', firstImage)
+      .attach('images', firstImage)
       .attach('photos', secondImage)
       .expect(400);
 
-    // 前端需要通过 code 识别错误，而不只依赖 HTTP 400。
+    // 确认错误信息仍符合前后端约定。
     expect(response.body).toMatchObject({
       code: 'INVALID_COUNT',
       message: '请使用 images 字段上传图片',
     });
+
+    // 请求结束后，找出仍然存在的“本次新增”目录。
+    const leftovers = (await readdir(tmpdir())).filter(
+      (name) => name.startsWith('image-stitch-') && !before.has(name),
+    );
+
+    // 即使上传到一半失败，已经上传的第一张也不能遗留在磁盘。
+    expect(leftovers).toEqual([]);
   });
 });
