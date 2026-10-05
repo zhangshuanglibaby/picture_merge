@@ -53,4 +53,73 @@ describe('StitchTaskLimiter', () => {
     // 一个任务只应让计数减少一次。
     expect(limiter.getActiveCount()).toBe(0);
   });
+
+  it('执行位置满时，任务可以进入有限等待队列', async () => {
+    // 创建一个全新的限流器，避免受到其他测试影响。
+    const limiter = new StitchTaskLimiter();
+
+    // 先占满两个正在执行的位置。
+    const releaseFirst = limiter.tryAcquire();
+    const releaseSecond = limiter.tryAcquire();
+
+    expect(releaseFirst).toBeTypeOf('function');
+    expect(releaseSecond).toBeTypeOf('function');
+    expect(limiter.getActiveCount()).toBe(2);
+
+    // 第三个任务没有立即位置，因此进入等待队列。
+    const waitingTask = limiter.acquire();
+
+    // 等待队列中应该有一个任务。
+    expect(limiter.getWaitingCount()).toBe(1);
+
+    // 释放第一个执行位置。
+    releaseFirst?.();
+
+    // 第三个任务现在应该接替释放出来的位置。
+    const releaseThird = await waitingTask;
+
+    expect(releaseThird).toBeTypeOf('function');
+    expect(limiter.getActiveCount()).toBe(2);
+    expect(limiter.getWaitingCount()).toBe(0);
+
+    // 清理本测试占用的两个执行位置。
+    releaseSecond?.();
+    releaseThird?.();
+
+    expect(limiter.getActiveCount()).toBe(0);
+  });
+
+  it('执行位置和等待队列都满时拒绝新任务', async () => {
+    // 创建一个全新的限流器。
+    const limiter = new StitchTaskLimiter();
+
+    // 占满两个正在执行的位置。
+    const releaseFirst = limiter.tryAcquire();
+    const releaseSecond = limiter.tryAcquire();
+
+    // 前两个额外任务进入等待队列。
+    const waitingFirst = limiter.acquire();
+    const waitingSecond = limiter.acquire();
+
+    expect(limiter.getWaitingCount()).toBe(2);
+
+    // 第五个任务既没有执行位置，也没有等待位置。
+    const rejected = await limiter.acquire();
+
+    expect(rejected).toBeNull();
+
+    // 释放执行位置，让等待任务依次接管。
+    releaseFirst?.();
+    releaseSecond?.();
+
+    const releaseThird = await waitingFirst;
+    const releaseFourth = await waitingSecond;
+
+    // 清理接管位置的任务。
+    releaseThird?.();
+    releaseFourth?.();
+
+    expect(limiter.getActiveCount()).toBe(0);
+    expect(limiter.getWaitingCount()).toBe(0);
+  });
 });

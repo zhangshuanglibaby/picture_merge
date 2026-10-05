@@ -1,47 +1,114 @@
 /**
- * 同时最多处理两个拼接任务 的计数器
- * 
- * 想象只有两个工作位置：前两个任务可以进入；第三个暂时没有位置。任务结束后归还位置，后续任务才能进入。
+ * 管理图片拼接任务的并发位置和等待队列。
+ *
+ * 当前配置：
+ * - 同时执行：最多 2 个任务
+ * - 等待队列：最多 2 个任务
  */
 
-// 同时允许多少个任务进行图片拼接。
-// 暂定为 2；这是初始保护值，后续要根据实际内存和压测结果调整。
+// 同时执行的任务数量上限。
 const MAX_ACTIVE_TASKS = 2;
 
+// 正在等待执行的位置数量上限。
+const MAX_WAITING_TASKS = 2;
+
+// 任务完成后调用的释放函数类型。
+type ReleaseTask = () => void;
+
+// 等待任务的处理函数类型。
+type WaitingResolver = (release: ReleaseTask) => void;
 
 export class StitchTaskLimiter {
-  // 当前已经占用的工作位置数量。每个计数器实例单独记录。
+  // 当前正在执行的任务数量。
   private activeTasks = 0;
 
+  // 等待执行的任务。
+  private waitingResolvers: WaitingResolver[] = [];
+
   /**
-  * 尝试取得一个工作位置。
-  * 成功时返回“归还位置”的函数；位置用完时返回 null。
-  */
-  tryAcquire(): (() => void) | null {
-    // 两个位置都被占用时，不再接受新的处理任务。
+   * 立即尝试取得执行位置。
+   *
+   * 这个方法不会进入等待队列：
+   * - 有空位：返回释放函数
+   * - 没有空位：返回 null
+   */
+  tryAcquire(): ReleaseTask | null {
+    // 已经达到同时执行数量上限。
     if (this.activeTasks >= MAX_ACTIVE_TASKS) {
       return null;
     }
 
-    // 占用一个位置。例如原来是 0，现在变成 1。
+    // 占用一个执行位置。
     this.activeTasks += 1;
 
-    // 防止调用方不小心归还两次，导致计数变成负数。
+    // 返回这个任务对应的释放函数。
+    return this.createReleaseTask();
+  }
+
+  /**
+   * 取得执行位置；没有空位时进入有限等待队列。
+   *
+   * 返回 null 表示：
+   * - 执行位置已满
+   * - 等待队列也已满
+   */
+  async acquire(): Promise<ReleaseTask | null> {
+    // 先尝试立即取得执行位置。
+    const release = this.tryAcquire();
+
+    // 有空位时直接返回释放函数。
+    if (release !== null) {
+      return release;
+    }
+
+    // 等待队列已满时，不再接受新任务。
+    if (this.waitingResolvers.length >= MAX_WAITING_TASKS) {
+      return null;
+    }
+
+    // 没有立即空位，但队列还有容量。
+    // 返回一个尚未完成的 Promise，等已有任务释放位置。
+    return new Promise<ReleaseTask>((resolve) => {
+      this.waitingResolvers.push(resolve);
+    });
+  }
+
+  /**
+   * 创建一个只能执行一次的释放函数。
+   */
+  private createReleaseTask(): ReleaseTask {
+    // 防止同一个任务重复释放位置。
     let released = false;
 
     return () => {
-      // 同一个位置已经归还过，就不能重复归还。
+      // 已经释放过的位置不能重复处理。
       if (released) {
         return;
       }
 
       released = true;
+
+      // 如果有等待任务，直接把刚释放的位置交给它。
+      const nextWaitingTask = this.waitingResolvers.shift();
+
+      if (nextWaitingTask) {
+        // activeTasks 不减少，因为位置马上被下一个任务接管。
+        nextWaitingTask(this.createReleaseTask());
+        return;
+      }
+
+      // 没有等待任务时，真正减少执行中的任务数量。
       this.activeTasks -= 1;
     };
   }
 
-  // 只用于查看当前占用量；调用它不会增加或减少位置。
+  // 返回当前正在执行的任务数量。
   getActiveCount(): number {
     return this.activeTasks;
+  }
+
+  // 返回当前等待队列中的任务数量。
+  getWaitingCount(): number {
+    return this.waitingResolvers.length;
   }
 }
