@@ -228,13 +228,24 @@ describe('POST /images/stitch', () => {
     }
   });
 
-  it('拼接结果超过高度上限时返回 422 和明确错误码', async () => {
-    // 每张图比输出高度上限的一半多 1 行。
-    // 当前上限为 30000，因此单张是 15001 行，两张合计 30002 行。
+  it('拼接结果超过高度上限时返回 422，并释放资源后恢复正常', async () => {
+    // 取得真实应用中的限流器实例。
+    // 这样才能检查这次请求结束后，并发占用数量是否归零。
+    const limiter = app.get(StitchTaskLimiter);
+
+    // 记录请求开始前已经存在的临时工作区。
+    // 测试结束后应恢复到同样的状态。
+    const before = new Set(
+      (await readdir(tmpdir())).filter((name) =>
+        name.startsWith('image-stitch-'),
+      ),
+    );
+
+    // 每张图片比输出高度上限的一半多 1 行。
+    // 两张图片合计后一定会超过最大输出高度。
     const singleHeight = Math.floor(IMAGE_LIMITS.maxOutputHeight / 2) + 1;
 
-    // 在内存里生成合法的 PNG；宽度仅 1 像素，避免占用大量内存。
-    // 纯白图片不能提供可靠的重叠证据，因此不会自动裁掉其中一张。
+    // 创建一张合法但高度很大的 PNG 图片。
     const imageBuffer = await sharp({
       create: {
         width: 1,
@@ -244,19 +255,45 @@ describe('POST /images/stitch', () => {
       },
     }).png().toBuffer();
 
-    // 像前端一样，向真正的上传接口发送两张图片。
+    // 发送会导致拼接结果超出高度上限的请求。
     const response = await request(app.getHttpServer())
       .post('/images/stitch')
       .attach('images', imageBuffer, 'first.png')
       .attach('images', imageBuffer, 'second.png')
       .expect(422);
 
-    // 失败时应返回 JSON 错误，而不是一张不完整的 PNG。
+    // 失败时应该返回 JSON 错误，而不是不完整的 PNG。
     expect(response.headers['content-type']).toMatch(/application\/json/);
+
+    // 确认业务错误码和错误信息保持不变。
     expect(response.body).toMatchObject({
       code: 'OUTPUT_TOO_LARGE',
       message: '拼接结果超出处理范围',
     });
+
+    // worker 失败后，控制器的 finally 应该释放并发位置。
+    expect(limiter.getActiveCount()).toBe(0);
+
+    // worker 失败后，上传拦截器也应该清理临时工作区。
+    const after = new Set(
+      (await readdir(tmpdir())).filter((name) =>
+        name.startsWith('image-stitch-'),
+      ),
+    );
+    expect(after).toEqual(before);
+
+    // 再发送一次正常请求，验证失败不会让接口永久处于 BUSY 或异常状态。
+    const recoveredResponse = await request(app.getHttpServer())
+      .post('/images/stitch')
+      .attach('images', firstImage)
+      .attach('images', secondImage)
+      .expect(200);
+
+    // 恢复请求应该返回正常的 PNG。
+    expect(recoveredResponse.headers['content-type']).toMatch(/image\/png/);
+
+    // 正常请求结束后，并发位置也应该归零。
+    expect(limiter.getActiveCount()).toBe(0);
   }, 30_000);
 
   it('上传六张图片时拒绝请求，并清理临时目录', async () => {
