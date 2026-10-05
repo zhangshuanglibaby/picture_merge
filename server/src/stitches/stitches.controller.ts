@@ -47,6 +47,8 @@ import { StitchTaskLimiter } from './stitch-task-limiter.js';
 import { StitchWorkerPool } from './stitch-worker.pool.js';
 // 仅处理当前拼接接口中“连接已关闭”的排队取消。
 import { DisconnectedWaitFilter } from './disconnected-wait.filter.js';
+// 引入图片处理任务的时间限制。
+import { PROCESSING_LIMITS } from '../config/processing-limits.js';
 
 
 // 控制器前缀是 images，下面的方法路径是 stitch。
@@ -110,6 +112,18 @@ export class StitchesController {
 
       // 已取得执行位置后，使用这个信号取消正在运行的 worker。
       const workerAbort = new AbortController();
+
+      // 服务端超时信号；任务超过 30 秒后自动取消 worker。
+      const workerTimeout = AbortSignal.timeout(
+        PROCESSING_LIMITS.maxWorkerTimeMs,
+      );
+
+      // 将客户端断线信号和服务端超时信号合并。
+      // 任意一个信号触发，Piscina 都会取消 worker。
+      const workerSignal = AbortSignal.any([
+        workerAbort.signal,
+        workerTimeout,
+      ]);
 
       // 标记是否已经取得执行位置。
       let hasExecutionSlot = false;
@@ -182,8 +196,8 @@ export class StitchesController {
             workspaceDirectory: request.uploadWorkspace.directory,
           },
 
-          // 把客户端断线信号传给 Piscina worker。
-          workerAbort.signal,
+          // 同时监听客户端断线和服务端超时。
+          workerSignal,
         );
 
         // 将完成的 PNG 作为二进制图片返回。
@@ -193,6 +207,19 @@ export class StitchesController {
           length: result.png.length,
         });
       } catch (error) {
+        // 服务端超时取消时，返回现有的处理失败错误。
+        // 此时响应仍可能连接着，不能被断线过滤器吞掉。
+        if (
+          workerTimeout.aborted &&
+          error instanceof Error &&
+          error.name === 'AbortError'
+        ) {
+          throw new StitchError(
+            'PROCESSING_FAILED',
+            '图片处理超时，请稍后重试',
+          );
+        }
+
         // 客户端断开导致 Piscina 取消 worker 时，统一转换成项目自己的取消异常。
         if (
           workerAbort.signal.aborted &&

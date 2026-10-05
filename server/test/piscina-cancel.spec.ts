@@ -84,4 +84,33 @@ describe('Piscina worker 取消', () => {
       }),
     ).resolves.toBe('完成');
   });
+
+  it('超时信号触发后，会取消正在运行的任务', async () => {
+    // 创建一个 100 毫秒后自动触发的超时信号。
+    const timeoutSignal = AbortSignal.timeout(100);
+
+    // 提交一个需要运行 10 秒的测试任务。
+    const runningTask = pool.run(
+      {
+        mode: 'wait',
+        delayMs: 10_000,
+      },
+      {
+        // 把超时信号传给 Piscina。
+        signal: timeoutSignal,
+      },
+    );
+
+    // 超时后，Piscina 应该以 AbortError 拒绝任务。
+    await expect(runningTask).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+
+    // 取消后线程池仍然可以处理后续任务。
+    await expect(
+      pool.run({
+        mode: 'quick',
+      }),
+    ).resolves.toBe('完成');
+  });
 });
