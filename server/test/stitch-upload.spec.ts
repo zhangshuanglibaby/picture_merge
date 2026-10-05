@@ -37,7 +37,32 @@ const secondImage = join(
   process.cwd(),
   'test/fixtures/overlap-2.png',
 );
+
+// 无效图片。
 const invalidImage = join(process.cwd(), 'test/fixtures/invalid.png');
+
+// 等待限流器中的等待任务数量达到预期。
+// HTTP 请求上传和进入 Controller 需要一点时间，因此不能立即读取队列数量。
+async function waitForWaitingCount(
+  limiter: StitchTaskLimiter,
+  expectedCount: number,
+): Promise<void> {
+  // 最多等待 5 秒，避免测试异常时永久卡住。
+  const deadline = Date.now() + 5_000;
+
+  // 不断检查等待队列数量。
+  while (limiter.getWaitingCount() < expectedCount) {
+    // 超过时间仍未进入队列，说明接口没有正确使用等待队列。
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `等待队列数量未达到 ${expectedCount}，当前数量为 ${limiter.getWaitingCount()}`,
+      );
+    }
+
+    // 暂停 10 毫秒，再检查一次。
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 /**
  * 执行过程
@@ -490,4 +515,80 @@ describe('POST /images/stitch', () => {
     );
     expect(leftovers).toEqual([]);
   }, 60_000);
+
+  it('HTTP 请求进入等待队列后，释放位置时最终返回 200', async () => {
+    // 取得 Controller 实际使用的限流器单例。
+    const limiter = app.get(StitchTaskLimiter);
+
+    // 记录请求开始前已有的临时工作区。
+    const before = new Set(
+      (await readdir(tmpdir())).filter((name) =>
+        name.startsWith('image-stitch-'),
+      ),
+    );
+
+    // 先占满两个正在执行的位置。
+    const releaseFirst = limiter.tryAcquire();
+    const releaseSecond = limiter.tryAcquire();
+
+    // 创建并立即启动第一个 HTTP 请求。
+    // then() 会让 Supertest 真正开始发送请求。
+    const firstQueuedRequest = request(app.getHttpServer())
+      .post('/images/stitch')
+      .attach('images', firstImage)
+      .attach('images', secondImage)
+      .expect(200)
+      .then((response) => response);
+
+    // 创建并立即启动第二个 HTTP 请求。
+    const secondQueuedRequest = request(app.getHttpServer())
+      .post('/images/stitch')
+      .attach('images', firstImage)
+      .attach('images', secondImage)
+      .expect(200)
+      .then((response) => response);
+
+    try {
+      // 确认两个 HTTP 请求都已经进入等待队列。
+      await waitForWaitingCount(limiter, 2);
+
+      // 释放两个正在执行的位置。
+      // 等待队列中的请求会依次接管这些位置。
+      releaseFirst?.();
+      releaseSecond?.();
+
+      // 两个等待请求都应该最终处理成功。
+      const [firstResponse, secondResponse] = await Promise.all([
+        firstQueuedRequest,
+        secondQueuedRequest,
+      ]);
+
+      // 两个请求都应该返回 PNG。
+      expect(firstResponse.headers['content-type']).toMatch(/image\/png/);
+      expect(secondResponse.headers['content-type']).toMatch(/image\/png/);
+
+      // 所有请求结束后，不应再有执行中的任务或等待中的任务。
+      expect(limiter.getActiveCount()).toBe(0);
+      expect(limiter.getWaitingCount()).toBe(0);
+
+      // 检查两个请求的临时工作区都已经清理。
+      const after = new Set(
+        (await readdir(tmpdir())).filter((name) =>
+          name.startsWith('image-stitch-'),
+        ),
+      );
+
+      expect(after).toEqual(before);
+    } finally {
+      // 测试失败时也释放预先占用的位置。
+      releaseFirst?.();
+      releaseSecond?.();
+
+      // 等待两个 HTTP 请求结束，避免影响后续测试。
+      await Promise.allSettled([
+        firstQueuedRequest,
+        secondQueuedRequest,
+      ]);
+    }
+  }, 30_000);
 });
