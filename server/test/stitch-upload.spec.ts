@@ -39,6 +39,23 @@ const secondImage = join(
 );
 const invalidImage = join(process.cwd(), 'test/fixtures/invalid.png');
 
+/**
+ * 执行过程
+ * limiter.acquire()
+      ↓
+没有空闲位置
+      ↓
+进入等待队列
+      ↓
+返回 Promise
+      ↓
+releaseFirst()
+      ↓
+waitingFirst Promise 完成
+      ↓
+await waitingFirst 得到释放函数
+ */
+
 describe('POST /images/stitch', () => {
   let app: INestApplication;
 
@@ -167,6 +184,11 @@ describe('POST /images/stitch', () => {
     // 第二次调用占用第二个处理位置。
     const releaseSecond = limiter.tryAcquire();
 
+    // 前两个位置已经被占用。
+    // 后两个任务会进入等待队列。
+    const waitingFirst = limiter.acquire();
+    const waitingSecond = limiter.acquire();
+
     try {
       // 两次占位都必须成功，否则说明测试没有真正制造“已满”状态。
       expect(releaseFirst).not.toBeNull();
@@ -179,6 +201,12 @@ describe('POST /images/stitch', () => {
           name.startsWith('image-stitch-'),
         ),
       );
+
+      // 确认等待队列已经有两个任务。
+      expect(limiter.getWaitingCount()).toBe(2);
+
+      // 现在执行中的两个位置和等待中的两个任务都已占满。
+      // 第五个任务才应该返回 BUSY。
 
       // 此时两个处理位置都被占用，因此接口应该快速返回 503。
       const busyResponse = await request(app.getHttpServer())
@@ -200,13 +228,21 @@ describe('POST /images/stitch', () => {
       );
       expect(leftovers).toEqual([]);
 
-      // 释放两个预先占用的处理位置。
-      // 释放后，后续请求应该可以重新进入控制器。
+      // 先释放两个正在执行的位置。
       releaseFirst?.();
       releaseSecond?.();
 
-      // 确认两个位置都已经归还。
+      // 被唤醒的等待任务会接管刚刚释放的位置。
+      const releaseQueuedFirst = await waitingFirst;
+      const releaseQueuedSecond = await waitingSecond;
+
+      // 再释放两个等待任务接管的位置。
+      releaseQueuedFirst?.();
+      releaseQueuedSecond?.();
+
+      // 所有执行任务和等待任务都已经结束。
       expect(limiter.getActiveCount()).toBe(0);
+      expect(limiter.getWaitingCount()).toBe(0);
 
       // 发送同样的有效请求，验证释放后接口恢复正常。
       const recoveredResponse = await request(app.getHttpServer())
@@ -221,10 +257,20 @@ describe('POST /images/stitch', () => {
       // 确认控制器在正常请求结束时也归还了处理位置。
       expect(limiter.getActiveCount()).toBe(0);
     } finally {
-      // 测试失败时也要归还位置，避免影响后面的测试。
-      // release 函数内部可以防止重复归还，因此这里重复调用是安全的。
+      // 即使前面的断言失败，也要释放正在执行的位置。
       releaseFirst?.();
       releaseSecond?.();
+      // 释放等待任务接管的位置。
+      const releaseQueuedFirst = await waitingFirst;
+      const releaseQueuedSecond = await waitingSecond;
+
+      // 释放等待任务占用的位置。
+      releaseQueuedFirst?.();
+      releaseQueuedSecond?.();
+
+      // 防止重复释放影响后面的测试。
+      expect(limiter.getActiveCount()).toBe(0);
+      expect(limiter.getWaitingCount()).toBe(0);
     }
   });
 

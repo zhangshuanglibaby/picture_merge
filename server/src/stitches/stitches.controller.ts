@@ -95,14 +95,14 @@ export class StitchesController {
         );
       }
 
-      // 尝试取得一个工作位置；已满时得到 null。
-      const release = this.stitchTaskLimiter.tryAcquire();
+      // 尝试取得一个处理位置。
+      // 如果当前两个位置都在使用，任务会进入最多两个任务的等待队列。
+      const release = await this.stitchTaskLimiter.acquire();
 
-      // 没有位置就立即返回 503，错误码为 BUSY。
+      // 执行位置和等待队列都满时，才返回 503。
       if (release === null) {
         throw new StitchError('BUSY', '当前处理任务较多，请稍后重试');
       }
-
       try {
         // 从这里开始，图片校验和拼接都占用同一个工作位置。
         const checked = await this.stitchesService.validateImages(
