@@ -69,4 +69,6 @@ describe('stitchTwoImages', () => {
 
     expect(actual.equals(expected)).toBe(true);
   });
+
+
 });

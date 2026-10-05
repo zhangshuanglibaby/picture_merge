@@ -122,4 +122,38 @@ describe('StitchTaskLimiter', () => {
     expect(limiter.getActiveCount()).toBe(0);
     expect(limiter.getWaitingCount()).toBe(0);
   });
+
+  it('取消等待任务后移出队列，后续任务仍能取得位置', async () => {
+    // 先占满两个执行位置。
+    const limiter = new StitchTaskLimiter();
+    const releaseFirst = limiter.tryAcquire();
+    const releaseSecond = limiter.tryAcquire();
+
+    // 第三个任务携带取消信号进入等待队列。
+    const controller = new AbortController();
+    const waiting = limiter.acquire(controller.signal);
+
+    // 先登记拒绝断言，再触发取消，避免遗漏 Promise 拒绝。
+    const rejected = expect(waiting).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(limiter.getWaitingCount()).toBe(1);
+
+    // 取消后，等待位置腾出；执行中的两个任务不受影响。
+    controller.abort();
+    await rejected;
+    expect(limiter.getWaitingCount()).toBe(0);
+    expect(limiter.getActiveCount()).toBe(2);
+
+    // 新任务仍可排队并在释放位置后被唤醒。
+    const nextWaiting = limiter.acquire();
+    releaseFirst?.();
+    const releaseNext = await nextWaiting;
+
+    expect(releaseNext).toBeTypeOf('function');
+    releaseSecond?.();
+    releaseNext?.();
+    expect(limiter.getActiveCount()).toBe(0);
+    expect(limiter.getWaitingCount()).toBe(0);
+  });
 });

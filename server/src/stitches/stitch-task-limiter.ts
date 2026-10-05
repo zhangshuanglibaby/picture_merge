@@ -46,30 +46,47 @@ export class StitchTaskLimiter {
   }
 
   /**
-   * 取得执行位置；没有空位时进入有限等待队列。
-   *
-   * 返回 null 表示：
-   * - 执行位置已满
-   * - 等待队列也已满
-   */
-  async acquire(): Promise<ReleaseTask | null> {
-    // 先尝试立即取得执行位置。
-    const release = this.tryAcquire();
+  * 取得执行位置；位置满时等待。
+  * signal 被取消时，从等待队列移除本任务。
+  */
+  async acquire(signal?: AbortSignal): Promise<ReleaseTask | null> {
+    // 已经取消的任务不能再占用位置。
+    if (signal?.aborted) {
+      throw new DOMException('等待任务已取消', 'AbortError');
+    }
 
-    // 有空位时直接返回释放函数。
+    // 有空位时沿用原来的立即取得逻辑。
+    const release = this.tryAcquire();
     if (release !== null) {
       return release;
     }
 
-    // 等待队列已满时，不再接受新任务。
+    // 两个等待位置也满了，沿用原来的 BUSY 判断。
     if (this.waitingResolvers.length >= MAX_WAITING_TASKS) {
       return null;
     }
 
-    // 没有立即空位，但队列还有容量。
-    // 返回一个尚未完成的 Promise，等已有任务释放位置。
-    return new Promise<ReleaseTask>((resolve) => {
-      this.waitingResolvers.push(resolve);
+    // 创建一个等待释放位置的 Promise。
+    return new Promise<ReleaseTask>((resolve, reject) => {
+      // 有人释放位置时，移除取消监听，再把位置交给等待任务。
+      const wake: WaitingResolver = (nextRelease) => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve(nextRelease);
+      };
+
+      // 取消时只移除仍在排队的任务，不改变正在执行的任务数量。
+      const onAbort = () => {
+        const index = this.waitingResolvers.indexOf(wake);
+        if (index === -1) {
+          return;
+        }
+        this.waitingResolvers.splice(index, 1);
+        reject(new DOMException('等待任务已取消', 'AbortError'));
+      };
+
+      // 先登记等待任务，再监听取消。
+      this.waitingResolvers.push(wake);
+      signal?.addEventListener('abort', onAbort, { once: true });
     });
   }
 
