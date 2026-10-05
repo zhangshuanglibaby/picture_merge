@@ -194,4 +194,25 @@ describe('POST /images/stitch', () => {
       message: '请选择 2～5 张图片',
     });
   });
+
+  it('单张图片超过上传大小上限时返回明确错误码', async () => {
+    // 比单张文件上限多创建 1 字节，精确测试“超过上限”的情况。
+    // Buffer 是 Node.js 的二进制数据容器；这里不必生成真实图片，
+    // 因为文件应该在上传阶段就被拒绝，不会进入图片解码步骤。
+    const oversizedFile = Buffer.alloc(IMAGE_LIMITS.maxFileBytes + 1);
+
+    // 第一张使用已有的有效图片，第二张使用刚创建的超限文件。
+    // 给二进制数据指定文件名，供 multipart 上传使用。
+    const response = await request(app.getHttpServer())
+      .post('/images/stitch')
+      .attach('images', firstImage)
+      .attach('images', oversizedFile, 'oversized.png')
+      .expect(413);
+
+    // 除了 HTTP 状态码，前端还需要通过业务 code 判断出错原因。
+    expect(response.body).toMatchObject({
+      code: 'IMAGE_TOO_LARGE',
+      message: '单张图片过大',
+    });
+  }, 30_000);
 });

@@ -10,6 +10,7 @@ import {
   Injectable,
   type NestInterceptor,
   BadRequestException, // 用来识别上传组件返回的“请求有误”异常。
+  PayloadTooLargeException, // 识别上传组件因单个文件超过大小限制而抛出的 413 异常。
 } from '@nestjs/common';
 
 // StitchError 是项目自己的错误类型，能给前端返回 code 和中文 message。
@@ -60,6 +61,16 @@ export class UploadWorkspaceInterceptor implements NestInterceptor {
           error.message === 'Too many files'
         ) {
           throw new StitchError('INVALID_COUNT', '请选择 2～5 张图片');
+        }
+
+        // 上传组件会先拦截过大的文件，此时图片校验逻辑还没有机会运行。
+        // 只转换它明确给出的“单个文件过大”错误，保留其他异常的原有行为。
+        if (
+          error instanceof PayloadTooLargeException &&
+          error.message === 'File too large'
+        ) {
+          // StitchError 会返回约定的 413 状态码、业务 code 和中文提示。
+          throw new StitchError('IMAGE_TOO_LARGE', '单张图片过大');
         }
 
         // 其他错误与图片数量无关，保持原样继续抛出，避免掩盖真实问题。
