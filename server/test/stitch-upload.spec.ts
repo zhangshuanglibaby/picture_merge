@@ -6,6 +6,8 @@ import { readdir } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 // Node.js 的系统工具：找到当前电脑用于存放临时文件的目录。
 import { tmpdir } from 'node:os';
+// 取得 HTTP 服务器类型，以便监听服务端响应何时关闭。
+import type { Server } from 'node:http';
 // 引入 Sharp，用来读取接口返回的 PNG 尺寸。
 import sharp from 'sharp';
 // 引入 NestJS 应用类型，保存测试期间创建的应用。
@@ -15,7 +17,7 @@ import { Test } from '@nestjs/testing';
 // 引入 HTTP 测试工具，向测试应用发送 multipart 上传请求。
 import request from 'supertest';
 // 引入 Vitest 的测试分组、断言和启动/清理钩子。
-import { afterAll, beforeAll, describe, it } from 'vitest';
+import { afterAll, beforeAll, describe, it, vi } from 'vitest';
 // 引入真正的应用模块，使测试经过路由、拦截器和校验服务。
 import { AppModule } from '../src/app.module.js';
 // 引入项目统一的图片尺寸限制，让测试使用与后端相同的上限。
@@ -24,6 +26,10 @@ import { IMAGE_LIMITS } from '../src/config/image-limits.js';
 // 引入真实应用使用的并发限流器。
 // 测试需要取得 NestJS 容器中的同一个实例，才能真正占满控制器使用的两个位置。
 import { StitchTaskLimiter } from '../src/stitches/stitch-task-limiter.js';
+// 取得实际注入 Controller 的 worker 池，测试时暂时控制其返回时间。
+import { StitchWorkerPool } from '../src/stitches/stitch-worker.pool.js';
+// worker 返回值的类型，让模拟结果符合现有接口。
+import type { StitchResult } from '../src/stitches/stitch-images.js';
 
 // 从 server 目录定位已有的测试图片。
 // 第一张测试图片。
@@ -667,6 +673,73 @@ describe('POST /images/stitch', () => {
       ) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
+    }
+  }, 10_000);
+
+  it('worker 执行期间断线不提前清理工作区', async () => {
+    // 记录已有目录，只检查本次请求新建的工作区。
+    const before = new Set(
+      (await readdir(tmpdir())).filter((name) => name.startsWith('image-stitch-')),
+    );
+    const limiter = app.get(StitchTaskLimiter);
+    const server = app.getHttpServer() as Server;
+
+    // 观察服务端响应确实收到了连接关闭事件。
+    let responseClosed = false;
+    server.once('request', (_request, response) => {
+      response.once('close', () => { responseClosed = true; });
+    });
+
+    // 创建一个暂不完成的 Promise，模拟仍在处理的 worker。
+    let finishWorker!: (result: StitchResult) => void;
+    const workerResult = new Promise<StitchResult>((resolve) => {
+      finishWorker = resolve;
+    });
+    // 客户端断开后不会读取这份模拟 PNG；这里只测试完成顺序。
+    const fakeResult: StitchResult = {
+      png: Buffer.from('fake-png'),
+      cropTopPx: [],
+      unconfirmedImageIndices: [],
+    };
+    const workerSpy = vi.spyOn(app.get(StitchWorkerPool), 'run')
+      .mockReturnValue(workerResult);
+
+    // 立即发起上传；接住主动断开产生的客户端错误。
+    const upload = request(server).post('/images/stitch')
+      .attach('images', firstImage)
+      .attach('images', secondImage);
+    const requestDone = upload.then(() => undefined, () => undefined);
+
+    try {
+      // 确认 Controller 已调用 worker，但模拟的 worker 还未完成。
+      await expect.poll(() => workerSpy.mock.calls.length).toBe(1);
+      const created = (await readdir(tmpdir())).filter(
+        (name) => name.startsWith('image-stitch-') && !before.has(name),
+      );
+      expect(created).toHaveLength(1);
+
+      // 断开客户端，并确认服务端观察到了响应关闭。
+      upload.abort();
+      await expect.poll(() => responseClosed, { timeout: 2_000 }).toBe(true);
+      await requestDone;
+
+      // worker 尚未完成：位置和两张上传图片都必须保留。
+      expect(limiter.getActiveCount()).toBe(1);
+      expect(await readdir(join(tmpdir(), created[0]))).toHaveLength(2);
+
+      // 现在才让 worker 完成；随后工作区和执行位置应被清理。
+      finishWorker(fakeResult);
+      await expect.poll(async () => {
+        const current = new Set(await readdir(tmpdir()));
+        return created.filter((name) => current.has(name));
+      }, { timeout: 2_000 }).toEqual([]);
+      expect(limiter.getActiveCount()).toBe(0);
+    } finally {
+      // 断言失败时也结束模拟任务、断开请求并恢复原方法。
+      finishWorker(fakeResult);
+      upload.abort();
+      await requestDone;
+      workerSpy.mockRestore();
     }
   }, 10_000);
 });
