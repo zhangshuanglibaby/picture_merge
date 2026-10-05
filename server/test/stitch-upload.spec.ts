@@ -173,4 +173,19 @@ describe('POST /images/stitch', () => {
       message: '拼接结果超出处理范围',
     });
   }, 30_000);
+
+  it('上传六张图片时拒绝请求', async () => {
+    // images 是接口约定的上传字段名。
+    // 六次上传同一张有效图片即可测试“数量上限”；
+    // 这里不需要准备六张内容不同的图片。
+    await request(app.getHttpServer())
+      .post('/images/stitch')
+      .attach('images', firstImage)
+      .attach('images', firstImage)
+      .attach('images', firstImage)
+      .attach('images', firstImage)
+      .attach('images', firstImage)
+      .attach('images', firstImage)
+      .expect(400); // 第六张超出最多五张的限制，请求应被拒绝。
+  });
 });

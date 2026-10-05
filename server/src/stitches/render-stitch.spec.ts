@@ -124,3 +124,41 @@ it('成品 PNG 恰好达到字节上限可以通过，超过 1 字节则拒绝',
     }),
   );
 });
+
+it('总高度未超限，但输出像素数超限时返回 OUTPUT_TOO_LARGE', async () => {
+  // 为这次测试创建独立的临时目录，避免把测试图片留在项目里。
+  const workspace = await createUploadWorkspace();
+
+  try {
+    // 单张图片为 1000 × 9000，即 900 万像素，低于单张 1200 万像素的限制。
+    const width = 1000;
+    const height = 9000;
+    const imagePath = join(workspace.directory, 'pixel-limit.png');
+
+    // 用 Sharp 生成一张纯白 PNG；这里测试的是尺寸规则，不依赖图片内容。
+    await sharp({
+      create: {
+        width,
+        height,
+        channels: 3,
+        background: '#ffffff',
+      },
+    }).png().toFile(imagePath);
+
+    // 使用三次同一张图片：总高度 27000，未超过 30000；
+    // 但总像素数为 1000 × 27000 = 2700 万，超过 2500 万。
+    // 不裁切任何一张，确保计算出的高度符合上面的预期。
+    await expect(
+      renderStitch(
+        [imagePath, imagePath, imagePath],
+        [0, 0, 0],
+      ),
+    ).rejects.toMatchObject({
+      status: 422,
+      response: { code: 'OUTPUT_TOO_LARGE' },
+    });
+  } finally {
+    // 不论测试通过还是失败，都删除生成的临时图片。
+    await workspace.cleanup();
+  }
+});
