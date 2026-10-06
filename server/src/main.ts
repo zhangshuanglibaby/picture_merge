@@ -28,6 +28,6 @@ async function bootstrap() {
   // 必须在 Multer 之前注册，提前限制整个 HTTP 请求大小。
   app.use(requestSizeLimitMiddleware);
 
-  await app.listen(process.env.PORT ?? 3000);
+  await app.listen(process.env.PORT ?? 3000, '127.0.0.1');
 }
 await bootstrap();
