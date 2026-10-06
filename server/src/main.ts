@@ -2,13 +2,13 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module.js';
 
 // ESM 项目的本地导入路径使用 .js 后缀。
-import { validateImageLimits, IMAGE_LIMITS } from './config/image-limits.js';
+import { validateImageLimits } from './config/image-limits.js';
 
 // 启动前清理上一次进程异常退出留下的过期工作区。
 import { cleanupStaleUploadWorkspaces } from './stitches/stale-upload-workspace.js';
 
-// 引入 Express 请求、响应和中间件函数类型。
-import type { NextFunction, Request, Response } from 'express';
+// 引入整次 HTTP 请求体积限制中间件。
+import { requestSizeLimitMiddleware } from './request-size-limit.middleware.js';
 
 async function bootstrap() {
   // 配置有误时立即停止启动，避免服务带着错误限制运行。
@@ -25,28 +25,8 @@ async function bootstrap() {
 
   const app = await NestFactory.create(AppModule);
 
-  // 在 Multer 接收上传文件之前检查整次请求声明的大小。
-  // 反向代理部署后也要配置相同的 50 MiB 限制。
-  app.use((request: Request, response: Response, next: NextFunction) => {
-    // Content-Length 表示整个 HTTP 请求体的字节数。
-    const contentLength = Number(request.headers['content-length']);
-
-    // 只有请求明确声明了长度，且长度超过限制时才提前拒绝。
-    if (
-      Number.isFinite(contentLength) &&
-      contentLength > IMAGE_LIMITS.maxUploadBytes
-    ) {
-      // 使用现有业务错误码，保持和服务层校验一致。
-      response.status(413).json({
-        code: 'IMAGE_TOO_LARGE',
-        message: '本次上传总大小超出限制',
-      });
-      return;
-    }
-
-    // 未超过限制，继续交给 Multer 和 Controller。
-    next();
-  });
+  // 必须在 Multer 之前注册，提前限制整个 HTTP 请求大小。
+  app.use(requestSizeLimitMiddleware);
 
   await app.listen(process.env.PORT ?? 3000);
 }
