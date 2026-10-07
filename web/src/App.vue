@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
-import { NButton } from 'naive-ui'
+import createIcon from './assets/images/create.svg'
 
 type PageState = 'selecting' | 'processing' | 'result'
 type SelectedImage = { id: number; file: File; previewUrl: string }
@@ -18,6 +18,10 @@ const selectedImages = ref<SelectedImage[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
 const returnButton = ref<HTMLButtonElement | null>(null)
 const uploadButton = ref<HTMLButtonElement | null>(null)
+const previewDialog = ref<HTMLDialogElement | null>(null)
+const previewId = ref<number | null>(null)
+let previewTrigger: HTMLButtonElement | null = null
+const previewImage = computed(() => selectedImages.value.find((image) => image.id === previewId.value))
 const error = ref('')
 const isAdding = ref(false)
 const resultUrl = ref('')
@@ -77,6 +81,26 @@ async function addImages(event: Event) {
   } finally {
     isAdding.value = false
   }
+}
+
+function openPreview(id: number, event: MouseEvent) {
+  previewId.value = id
+  previewTrigger = event.currentTarget as HTMLButtonElement
+  previewDialog.value?.showModal()
+}
+
+function closePreview() {
+  previewDialog.value?.close()
+}
+
+function handlePreviewBackdropClick(event: MouseEvent) {
+  if (event.target === previewDialog.value) closePreview()
+}
+
+function onPreviewClose() {
+  previewId.value = null
+  previewTrigger?.focus()
+  previewTrigger = null
 }
 
 function removeImage(id: number) {
@@ -163,15 +187,12 @@ onBeforeUnmount(() => {
 <template>
   <main class="app-shell">
     <div class="page-container">
-      <header class="site-header">
-        <span class="brand" aria-label="长图拼接">长图<span class="brand-mark" aria-hidden="true">.</span></span>
-        <span class="demo-label">本地演示</span>
-      </header>
-
       <section class="workspace" aria-labelledby="page-title">
         <div class="page-intro">
-          <h1 id="page-title">截图，拼成一张。</h1>
-          <p>按顺序选择图片，生成一张长图。</p>
+          <div class="intro-copy">
+            <h1 id="page-title">图片拼接工具</h1>
+            <p class="intro-subtitle">选好截图，一键拼成长图</p>
+          </div>
         </div>
 
         <div v-if="pageState === 'selecting'" class="workspace-content">
@@ -197,59 +218,56 @@ onBeforeUnmount(() => {
             <span class="upload-symbol" aria-hidden="true">+</span>
             <span class="upload-copy">
               <strong>{{ selectedImages.length ? '继续添加图片' : '选择图片' }}</strong>
-              <small>{{ selectedImages.length >= MAX_IMAGES ? '已达到 5 张上限' : '可一次选择多张，最多 5 张' }}</small>
+              <small>{{ selectedImages.length >= MAX_IMAGES ? '已选满 5 张' : '选择 2-5 张图片' }}</small>
             </span>
             <span class="upload-arrow" aria-hidden="true">↗</span>
           </button>
 
-          <section v-if="selectedImages.length" class="selection" aria-labelledby="selection-title">
-            <div class="selection-heading">
-              <h2 id="selection-title">已选图片</h2>
-              <span>{{ selectedImages.length }} / {{ MAX_IMAGES }}</span>
-            </div>
-            <ol class="image-list">
-              <li v-for="(image, index) in selectedImages" :key="image.id" class="image-row">
-                <span class="image-number">{{ String(index + 1).padStart(2, '0') }}</span>
-                <img class="image-thumb" :src="image.previewUrl" :alt="`第 ${index + 1} 张图片预览`" />
-                <span class="image-name" :title="image.file.name">{{ image.file.name }}</span>
-                <button type="button" class="remove-button" :aria-label="`移除第 ${index + 1} 张图片：${image.file.name}`" @click="removeImage(image.id)">移除</button>
+          <div v-if="selectedImages.length" class="selection">
+            <ul class="thumbnail-grid" aria-label="已选图片，按显示顺序拼接">
+              <li v-for="(image, index) in selectedImages" :key="image.id" class="thumbnail-item">
+                <button type="button" class="thumbnail-preview" :aria-label="`放大查看第 ${index + 1} 张图片`" @click="openPreview(image.id, $event)">
+                  <img :src="image.previewUrl" alt="" />
+                </button>
+                <button type="button" class="thumbnail-remove" :aria-label="`移除第 ${index + 1} 张图片`" @click="removeImage(image.id)">×</button>
               </li>
-            </ol>
-            <p class="order-note">将按上方顺序从上到下拼接</p>
-          </section>
+            </ul>
+          </div>
 
           <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
 
           <div class="action-area">
-            <NButton class="primary-action" type="primary" size="large" :disabled="!canStitch" :loading="isAdding" @click="stitchDemo">
-              生成长图 <span aria-hidden="true">↗</span>
-            </NButton>
-            <p v-if="selectedImages.length < 2" class="action-hint">至少选择 2 张图片</p>
+            <button class="primary-action" type="button" :disabled="!canStitch" @click="stitchDemo">
+              <span>生成长图</span>
+              <span class="primary-action-icon" aria-hidden="true"><img :src="createIcon" alt="" /></span>
+            </button>
           </div>
-          <p class="demo-note">演示模式：图片仅在本地处理，不会自动去除重叠内容。</p>
         </div>
 
         <div v-else-if="pageState === 'processing'" class="processing-view" role="status" aria-live="polite">
           <div class="processing-line" aria-hidden="true"></div>
-          <h2>正在生成长图</h2>
-          <p>请稍候，图片仅在当前设备处理。</p>
+          <h2>正在生成</h2>
         </div>
 
         <div v-else class="result-view">
           <div class="result-heading">
             <div>
-              <h2>长图已生成</h2>
-              <p>演示结果：按顺序纵向排列，未自动去重。</p>
+              <h2>已生成</h2>
+              <p>按所选顺序排列，未自动去重。</p>
             </div>
             <button ref="returnButton" type="button" class="back-button" @click="returnToSelection">返回调整</button>
           </div>
           <div class="result-actions">
-            <a class="download-button" :href="resultUrl" download="拼接长图-演示.png">下载图片 <span aria-hidden="true">↗</span></a>
+            <a class="download-button" :href="resultUrl" download="拼接长图.png">下载图片 <span aria-hidden="true">↗</span></a>
             <span>若无法直接下载，可尝试长按下方图片保存。</span>
           </div>
           <img class="result-image" :src="resultUrl" alt="按所选顺序纵向排列的演示长图" />
         </div>
       </section>
     </div>
+    <dialog ref="previewDialog" class="preview-dialog" aria-label="图片预览" @close="onPreviewClose" @click="handlePreviewBackdropClick">
+      <button type="button" class="preview-close" aria-label="关闭图片预览" @click="closePreview">×</button>
+      <img v-if="previewImage" :src="previewImage.previewUrl" alt="放大的已选图片" />
+    </dialog>
   </main>
 </template>
