@@ -22,6 +22,8 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, it, vi } from 'vitest';
 // 引入真正的应用模块，使测试经过路由、拦截器和校验服务。
 import { AppModule } from '../src/app.module.js';
+// 用与生产入口相同的整次请求体限制验证所有上传用例。
+import { requestSizeLimitMiddleware } from '../src/request-size-limit.middleware.js';
 // 引入项目统一的图片尺寸限制，让测试使用与后端相同的上限。
 import { IMAGE_LIMITS } from '../src/config/image-limits.js';
 
@@ -155,6 +157,58 @@ describe('POST /images/stitch', () => {
     // 最终高度 = 320 + 320 - 100 = 540。
     expect(metadata.width).toBe(240);
     expect(metadata.height).toBe(540);
+  });
+
+  it('接受三张高分辨率照片并返回未超限的 PNG', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/images/stitch')
+      .attach('images', join(process.cwd(), 'test/fixtures/IMG_7698.JPG'))
+      .attach('images', join(process.cwd(), 'test/fixtures/IMG_7704.JPG'))
+      .attach('images', join(process.cwd(), 'test/fixtures/IMG_7707.jpg'))
+      .expect(200);
+
+    const metadata = await sharp(response.body).metadata();
+    expect(response.headers['content-type']).toMatch(/image\/png/);
+    expect(response.body.length).toBeLessThanOrEqual(IMAGE_LIMITS.maxOutputBytes);
+    expect(metadata.format).toBe('png');
+    expect(metadata.width! * metadata.height!).toBeLessThanOrEqual(
+      IMAGE_LIMITS.maxOutputPixels,
+    );
+  }, 30_000);
+
+  // 单独验证生产入口中间件，不改变其他上传用例原有的业务层测试条件。
+  it('入口限制中间件不会提前消耗合法 multipart 请求', async () => {
+    // 创建真实的后端应用模块。
+    const moduleRef = await Test.createTestingModule({
+      // 加载图片上传路由和工作线程。
+      imports: [AppModule],
+      // 完成模块编译。
+    }).compile();
+    // 为本用例创建独立的 Nest 应用。
+    const entryApp = moduleRef.createNestApplication();
+    // 和 main.ts 一样在上传路由前注册入口限制。
+    entryApp.use(requestSizeLimitMiddleware);
+    // 初始化应用及其拦截器。
+    await entryApp.init();
+    try {
+      // 通过实际 multipart 上传两张合成图片。
+      const response = await request(entryApp.getHttpServer())
+        // 使用前后端共用的拼接路径。
+        .post('/images/stitch')
+        // 第一张文件对应列表中的第一张。
+        .attach('images', firstImage)
+        // 第二张文件对应列表中的第二张。
+        .attach('images', secondImage)
+        // 正常请求应直接返回 PNG。
+        .expect(200);
+      // 检查响应类型确实是图片。
+      expect(response.headers['content-type']).toMatch(/image\/png/);
+      // 检查响应不是空数据或 JSON 文本。
+      expect(response.body.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+    } finally {
+      // 关闭本用例创建的应用和 worker。
+      await entryApp.close();
+    }
   });
 
   it('只有一张图片时拒绝请求', async () => {

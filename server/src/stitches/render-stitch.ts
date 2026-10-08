@@ -147,13 +147,23 @@ export async function renderStitch(
     .png() // 转换为 PNG 格式。
     .toBuffer(); // 转换为 Buffer。
 
-  // Buffer.length 是成品 PNG 的实际字节数，不是图片的像素数量。
-  // 超限时抛出已有的业务错误，让接口返回 422 和明确的错误码。
-  // if (output.length > IMAGE_LIMITS.maxOutputBytes) {
-  //   throw new StitchError('OUTPUT_TOO_LARGE', '拼接结果超出处理范围');
-  // }
-  // // 只有成品文件大小合规，才把完整 PNG 交给控制器返回。
-  // return output;
-  // 图片已合成并编码；调用上面的检查函数，合规后返回 PNG。
-  return assertOutputByteLimit(output);
+  if (output.length <= IMAGE_LIMITS.maxOutputBytes) {
+    return output;
+  }
+
+  // 照片的 PNG 压缩率无法从尺寸预知。仅当成品超出字节预算时，
+  // 缩到 RGB 原始数据也能放进预算的像素数，保留完整画面。
+  const safePixels = Math.floor(IMAGE_LIMITS.maxOutputBytes / 3.2);
+  const width = Math.floor(outputWidth * Math.sqrt(safePixels / (outputWidth * outputHeight)));
+  if (width < 1) {
+    throw new StitchError('OUTPUT_TOO_LARGE', '拼接结果超出处理范围');
+  }
+  const resized = await sharp(output, {
+    limitInputPixels: IMAGE_LIMITS.maxOutputPixels,
+  })
+    .resize({ width, withoutEnlargement: true })
+    .png()
+    .toBuffer();
+
+  return assertOutputByteLimit(resized);
 }

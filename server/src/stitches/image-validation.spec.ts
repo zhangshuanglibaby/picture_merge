@@ -12,6 +12,14 @@ const fixture = (name: string) =>
   fileURLToPath(new URL(`../../test/fixtures/${name}`, import.meta.url));
 
 describe('图片基础校验', () => {
+  it('接受提供的三张手机照片', async () => {
+    for (const name of ['IMG_7698.JPG', 'IMG_7704.JPG', 'IMG_7707.jpg']) {
+      await expect(validateImage(fixture(name))).resolves.toMatchObject({
+        format: 'jpeg',
+      });
+    }
+  });
+
   it('接受真正的 PNG，并读取尺寸', async () => {
     await expect(validateImage(fixture('overlap-1.png'))).resolves.toEqual({
       format: 'png',

@@ -4,7 +4,7 @@ export const IMAGE_LIMITS = {
   maxImages: 5,                    // 一次最多上传 5 张。
   maxFileBytes: 15 * 1024 * 1024, // 单张最多 15 MiB。
   maxUploadBytes: 50 * 1024 * 1024, // 一次上传暂定最多 50 MiB。
-  maxInputPixels: 12_000_000,     // 单张最多 1200 万像素。
+  maxInputPixels: 20_000_000,     // 单张最多 2000 万像素；覆盖常见手机照片。
   maxInputSide: 16_000,           // 单张最长边最多 16000 像素。
   maxOutputPixels: 25_000_000,    // 拼接结果最多 2500 万像素。
   maxOutputHeight: 30_000,        // 拼接结果最高 30000 像素。

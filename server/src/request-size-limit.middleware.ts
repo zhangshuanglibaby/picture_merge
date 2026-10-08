@@ -47,6 +47,13 @@ export function requestSizeLimitMiddleware(
     return;
   }
 
+  // 请求头给出合法的总长度且未超限时，无须读取请求流。
+  if (Number.isSafeInteger(contentLength) && contentLength >= 0) {
+    // 保持请求暂停状态，让 Multer 收到完整的 multipart 数据。
+    next();
+    return;
+  }
+
   // 当前已经收到的请求体字节数。
   let receivedBytes = 0;
 
@@ -88,13 +95,21 @@ export function requestSizeLimitMiddleware(
 
   // 请求正常结束或连接关闭时，移除监听器。
   const cleanup = (): void => {
+    // 移除等待流开始读取的监听器。
+    request.removeListener('resume', startCounting);
     request.removeListener('data', handleData);
     request.removeListener('end', cleanup);
     request.removeListener('close', cleanup);
   };
 
-  // 监听请求体数据，覆盖没有 Content-Length 的分块请求。
-  request.on('data', handleData);
+  // 下游开始读取时才监听数据；提前监听 data 会让流先于 Multer 开始流动。
+  const startCounting = (): void => {
+    // 在 resume 事件触发时，下游已准备好读取请求体。
+    request.on('data', handleData);
+  };
+
+  // 无长度请求开始流动时才安装计数器。
+  request.once('resume', startCounting);
 
   // 正常接收完毕后清理监听器。
   request.on('end', cleanup);

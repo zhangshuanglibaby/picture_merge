@@ -1,4 +1,6 @@
 <script setup lang="ts">
+// 使用 Axios 发送 multipart 请求并接收 PNG 二进制响应。
+import axios from 'axios'
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import createIcon from './assets/images/create.svg'
 
@@ -8,23 +10,22 @@ type SelectedImage = { id: number; file: File; previewUrl: string }
 const MAX_IMAGES = 5
 const MAX_FILE_BYTES = 15 * 1024 * 1024
 const SUPPORTED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const MAX_OUTPUT_WIDTH = 1080
-const MAX_OUTPUT_HEIGHT = 16000
-const MAX_OUTPUT_PIXELS = 16_000_000
-const MIN_OUTPUT_WIDTH = 160
-
 const pageState = ref<PageState>('selecting')
 const selectedImages = ref<SelectedImage[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
-const returnButton = ref<HTMLButtonElement | null>(null)
+const downloadLink = ref<HTMLAnchorElement | null>(null)
 const uploadButton = ref<HTMLButtonElement | null>(null)
 const previewDialog = ref<HTMLDialogElement | null>(null)
 const previewId = ref<number | null>(null)
+const isResultPreview = ref(false)
 let previewTrigger: HTMLButtonElement | null = null
 const previewImage = computed(() => selectedImages.value.find((image) => image.id === previewId.value))
+const previewUrl = computed(() => isResultPreview.value ? resultUrl.value : previewImage.value?.previewUrl)
 const error = ref('')
 const isAdding = ref(false)
 const resultUrl = ref('')
+// 保存正在处理的请求，以便页面销毁时中止上传或等待。
+let activeRequest: AbortController | null = null
 let nextId = 0
 
 const canStitch = computed(() => selectedImages.value.length >= 2 && !isAdding.value)
@@ -76,7 +77,7 @@ async function addImages(event: Event) {
       }
     }
     if (rejected && overflow) error.value = `${rejected} 张图片不可用，另有 ${overflow} 张超出上限。`
-    else if (rejected) error.value = `${rejected} 张图片未添加，请选择不超过 15 MB 的 JPG、PNG 或 WebP 图片。`
+    else if (rejected) error.value = `${rejected} 张图片未添加，请选择不超过 15 MiB 的 JPG、PNG 或 WebP 图片。`
     else if (overflow) error.value = `最多添加 ${MAX_IMAGES} 张，另有 ${overflow} 张未添加。`
   } finally {
     isAdding.value = false
@@ -84,7 +85,14 @@ async function addImages(event: Event) {
 }
 
 function openPreview(id: number, event: MouseEvent) {
+  isResultPreview.value = false
   previewId.value = id
+  previewTrigger = event.currentTarget as HTMLButtonElement
+  previewDialog.value?.showModal()
+}
+
+function openResultPreview(event: MouseEvent) {
+  isResultPreview.value = true
   previewTrigger = event.currentTarget as HTMLButtonElement
   previewDialog.value?.showModal()
 }
@@ -99,6 +107,7 @@ function handlePreviewBackdropClick(event: MouseEvent) {
 
 function onPreviewClose() {
   previewId.value = null
+  isResultPreview.value = false
   previewTrigger?.focus()
   previewTrigger = null
 }
@@ -116,69 +125,96 @@ function clearResult() {
   resultUrl.value = ''
 }
 
-function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (blob) resolve(blob)
-      else reject(new Error('无法生成图片'))
-    }, 'image/png')
-  })
-}
-
-async function stitchDemo() {
+// 按页面上的图片顺序上传文件，并将后端返回的 PNG 用于结果预览。
+async function stitchImages() {
+  // 不足两张、正在添加或已经提交时，不再发起请求。
   if (!canStitch.value || pageState.value !== 'selecting') return
+  // 清除之前的错误提示。
   error.value = ''
+  // 立即切换状态，阻止连点造成重复提交。
   pageState.value = 'processing'
+  // 为当前请求创建中止信号。
+  const controller = new AbortController()
+  // 记录当前请求，供页面销毁时使用。
+  activeRequest = controller
 
   try {
-    const images = await Promise.all(selectedImages.value.map((item) => loadImage(item.previewUrl)))
-    const heightRatio = images.reduce((sum, image) => sum + image.naturalHeight / image.naturalWidth, 0)
-    const width = Math.floor(Math.min(
-      MAX_OUTPUT_WIDTH,
-      MAX_OUTPUT_HEIGHT / heightRatio,
-      Math.sqrt(MAX_OUTPUT_PIXELS / heightRatio),
-    ))
-    if (width < MIN_OUTPUT_WIDTH) throw new Error('图片过长')
-    const heights = images.map((image) => Math.max(1, Math.round(image.naturalHeight / image.naturalWidth * width)))
-    const height = heights.reduce((sum, value) => sum + value, 0)
-    const canvas = document.createElement('canvas')
-    canvas.width = width
-    canvas.height = height
-    const context = canvas.getContext('2d')
-    if (!context) throw new Error('无法创建画布')
-
-    context.fillStyle = '#ffffff'
-    context.fillRect(0, 0, width, height)
-    let y = 0
-    images.forEach((image, index) => {
-      const segmentHeight = heights[index]!
-      context.drawImage(image, 0, y, width, segmentHeight)
-      y += segmentHeight
+    // 创建浏览器负责设置边界的 multipart 请求体。
+    const formData = new FormData()
+    // 按可见列表顺序依次添加相同字段名，保持后端拼接顺序一致。
+    selectedImages.value.forEach((image) => {
+      // 每张图片都使用后端约定的 images 字段。
+      formData.append('images', image.file)
     })
-
-    const blob = await canvasToBlob(canvas)
+    // 请求同源路径；开发环境由 Vite 代理转发到本地后端。
+    const response = await axios.post<Blob>('/images/stitch', formData, {
+      // 成功图片和失败 JSON 都先作为 Blob 接收。
+      responseType: 'blob',
+      // 保留 4xx/5xx 响应，以便读取业务错误或代理错误。
+      validateStatus: () => true,
+      // 页面卸载时取消尚未完成的请求。
+      signal: controller.signal,
+    })
+    // 从响应头判断返回的是 PNG 还是 JSON/代理错误页。
+    const contentType = String(response.headers['content-type'] ?? '')
+    // 非 200 或非 PNG 均不能展示为图片。
+    if (response.status !== 200 || !contentType.includes('image/png')) {
+      // 代理返回 413 时未必有 JSON，先准备可理解的提示。
+      let message = response.status === 413
+        ? '上传图片总大小超出限制，请减少或更换图片。'
+        : `拼接失败（HTTP ${response.status}），请重试。`
+      // 只有 JSON 类型的错误响应才尝试读取业务消息。
+      if (contentType.includes('application/json')) {
+        try {
+          // Axios 的 blob 模式下，错误 JSON 也以 Blob 形式返回。
+          const text = await response.data.text()
+          // 将错误体解析为待检查的未知数据。
+          const detail: unknown = JSON.parse(text)
+          // 确保业务错误体确实包含可显示的消息。
+          if (detail && typeof detail === 'object' && 'message' in detail &&
+            typeof detail.message === 'string') {
+            // 使用后端给出的业务错误提示。
+            message = detail.message
+          }
+        } catch {
+          // 非法 JSON 保留原有提示，不把错误页当图片。
+        }
+      }
+      // 交给统一失败分支恢复页面状态。
+      throw new Error(message)
+    }
+    // 只在结果确认为 PNG 后清理上一张结果的 Object URL。
     clearResult()
-    resultUrl.value = URL.createObjectURL(blob)
+    // 从后端原始 Blob 创建供预览和下载共用的地址。
+    resultUrl.value = URL.createObjectURL(response.data)
+    // 显示拼接结果页面。
     pageState.value = 'result'
+    // 等待结果页面的下载入口渲染。
     await nextTick()
-    returnButton.value?.focus()
-  } catch {
-    error.value = '生成失败，请换一组较小的图片后重试。'
+    // 将键盘焦点移到下载按钮。
+    downloadLink.value?.focus()
+  } catch (cause) {
+    // 页面销毁后的主动取消无需再更新已经离开的页面。
+    if (controller.signal.aborted) return
+    // HTTP 业务错误保留后端提示；网络中断显示通用提示。
+    error.value = cause instanceof Error && !axios.isAxiosError(cause)
+      ? cause.message
+      : '连接失败，请检查网络或稍后重试。'
+    // 失败后保留已选图片，方便调整和再次提交。
     pageState.value = 'selecting'
+    // 等待错误提示与上传按钮重新显示。
     await nextTick()
+    // 让键盘用户可以继续操作上传入口。
     uploadButton.value?.focus()
+  } finally {
+    // 清除已结束的请求引用，避免之后误取消。
+    if (activeRequest === controller) activeRequest = null
   }
 }
 
-async function returnToSelection() {
-  clearResult()
-  pageState.value = 'selecting'
-  error.value = ''
-  await nextTick()
-  uploadButton.value?.focus()
-}
-
 onBeforeUnmount(() => {
+  // 页面销毁时取消尚未完成的上传或等待。
+  activeRequest?.abort()
   selectedImages.value.forEach((image) => URL.revokeObjectURL(image.previewUrl))
   clearResult()
 })
@@ -237,11 +273,12 @@ onBeforeUnmount(() => {
           <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
 
           <div class="action-area">
-            <button class="primary-action" type="button" :disabled="!canStitch" @click="stitchDemo">
+            <button class="primary-action" type="button" :disabled="!canStitch" @click="stitchImages">
               <span>生成长图</span>
               <span class="primary-action-icon" aria-hidden="true"><img :src="createIcon" alt="" /></span>
             </button>
           </div>
+          <p class="upload-notice">点击生成后，所选图片将上传至服务端进行拼接。</p>
         </div>
 
         <div v-else-if="pageState === 'processing'" class="processing-view" role="status" aria-live="polite">
@@ -250,24 +287,19 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-else class="result-view">
-          <div class="result-heading">
-            <div>
-              <h2>已生成</h2>
-              <p>按所选顺序排列，未自动去重。</p>
-            </div>
-            <button ref="returnButton" type="button" class="back-button" @click="returnToSelection">返回调整</button>
-          </div>
-          <div class="result-actions">
-            <a class="download-button" :href="resultUrl" download="拼接长图.png">下载图片 <span aria-hidden="true">↗</span></a>
-            <span>若无法直接下载，可尝试长按下方图片保存。</span>
-          </div>
-          <img class="result-image" :src="resultUrl" alt="按所选顺序纵向排列的演示长图" />
+          <button type="button" class="result-preview" aria-label="放大查看拼接长图" @click="openResultPreview($event)">
+            <img :src="resultUrl" alt="" />
+          </button>
+          <a ref="downloadLink" class="download-button" :href="resultUrl" download="拼接长图.png">
+            <span>下载图片</span>
+            <span class="primary-action-icon" aria-hidden="true"><img :src="createIcon" alt="" /></span>
+          </a>
         </div>
       </section>
     </div>
     <dialog ref="previewDialog" class="preview-dialog" aria-label="图片预览" @close="onPreviewClose" @click="handlePreviewBackdropClick">
       <button type="button" class="preview-close" aria-label="关闭图片预览" @click="closePreview">×</button>
-      <img v-if="previewImage" :src="previewImage.previewUrl" alt="放大的已选图片" />
+      <img v-if="previewUrl" :class="{ 'preview-result-image': isResultPreview }" :src="previewUrl" :alt="isResultPreview ? '放大的拼接长图' : '放大的已选图片'" />
     </dialog>
   </main>
 </template>

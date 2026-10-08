@@ -35,6 +35,7 @@ export async function normalizeImages(
 
   // 先找出方向调整后最窄的宽度，避免把小图放大。
   let targetWidth = Number.POSITIVE_INFINITY;
+  const dimensions: Array<{ width: number; height: number }> = [];
 
   // 遍历所有图片，计算出方向调整后最窄的宽度。
   for (const path of paths) {
@@ -44,14 +45,38 @@ export async function normalizeImages(
       limitInputPixels: IMAGE_LIMITS.maxInputPixels,
     }).metadata();
 
-    const width = metadata.autoOrient.width; // 获取图片宽度。
-    if (!Number.isSafeInteger(width) || width < 1) {
-      throw new Error('无法读取图片宽度');
+    const { width, height } = metadata.autoOrient;
+    if (
+      !Number.isSafeInteger(width) || width < 1 ||
+      !Number.isSafeInteger(height) || height < 1
+    ) {
+      throw new Error('无法读取图片尺寸');
     }
 
+    dimensions.push({ width, height });
     // 更新最窄宽度。
     targetWidth = Math.min(targetWidth, width);
   }
+
+  // 按没有任何重叠的情况预留画布，实际裁切只会让成品更小。
+  // 用向上取整估算高度，避免缩放取整后超过输出限制。
+  const fitsOutput = (width: number) => {
+    const height = dimensions.reduce(
+      (sum, image) => sum + Math.max(1, Math.ceil(image.height * width / image.width)),
+      0,
+    );
+    return height <= IMAGE_LIMITS.maxOutputHeight &&
+      width * height <= IMAGE_LIMITS.maxOutputPixels;
+  };
+
+  let low = 1;
+  let high = targetWidth;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (fitsOutput(middle)) low = middle;
+    else high = middle - 1;
+  }
+  targetWidth = low;
 
   // 准备保存新图片的目录。
   const normalizedPaths: string[] = [];
@@ -77,4 +102,3 @@ export async function normalizeImages(
 
   return normalizedPaths; // 返回新文件路径数组。
 }
-

@@ -8,6 +8,7 @@ import { expect, it } from 'vitest';
 import { createUploadWorkspace } from './upload-workspace.js';
 // 引入本步创建的图片预处理函数。
 import { normalizeImages } from './normalize-images.js';
+import { IMAGE_LIMITS } from '../config/image-limits.js';
 
 it('将不同宽度的图片统一为 240 像素宽', async () => {
   const workspace = await createUploadWorkspace();
@@ -29,6 +30,27 @@ it('将不同宽度的图片统一为 240 像素宽', async () => {
     expect([second.width, second.height]).toEqual([240, 300]);
   } finally {
     // 即使断言失败，也删除本次测试产生的临时文件。
+    await workspace.cleanup();
+  }
+});
+
+it('大照片按无重叠的总输出预算缩小，仍保持等宽', async () => {
+  const workspace = await createUploadWorkspace();
+  try {
+    const names = ['IMG_7698.JPG', 'IMG_7704.JPG', 'IMG_7707.jpg'];
+    const normalized = await normalizeImages(
+      names.map((name) => join(process.cwd(), 'test/fixtures', name)),
+      workspace.directory,
+    );
+    const sizes = await Promise.all(normalized.map((path) => sharp(path).metadata()));
+    const width = sizes[0].width!;
+    const height = sizes.reduce((sum, size) => sum + size.height!, 0);
+
+    expect(width).toBeLessThan(3128);
+    expect(sizes.every((size) => size.width === width)).toBe(true);
+    expect(height).toBeLessThanOrEqual(IMAGE_LIMITS.maxOutputHeight);
+    expect(width * height).toBeLessThanOrEqual(IMAGE_LIMITS.maxOutputPixels);
+  } finally {
     await workspace.cleanup();
   }
 });

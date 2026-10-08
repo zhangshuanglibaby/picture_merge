@@ -66,8 +66,11 @@ it('分块上传超过 50 MiB 时客户端收到 413 JSON', async () => {
         },
       );
 
-      // 如果服务端提前断开连接，测试应失败并暴露原因。
-      client.on('error', reject);
+      // 服务端在收满 51 MiB 前发出 413，客户端剩余写入可能得到 EPIPE。
+      client.on('error', (error: NodeJS.ErrnoException) => {
+        // 这里只忽略提前拒绝上传引起的写入端关闭，仍需等到真正的 413 响应。
+        if (error.code !== 'EPIPE') reject(error);
+      });
 
       // 重用 1 MiB 缓冲区，发送 51 MiB，不创建 51 份数据。
       const chunk = Buffer.alloc(1024 * 1024);
