@@ -3,6 +3,7 @@
 import axios from 'axios'
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import createIcon from './assets/images/create.svg'
+import backIcon from './assets/images/back.svg'
 
 type PageState = 'selecting' | 'processing' | 'result'
 type SelectedImage = { id: number; file: File; previewUrl: string }
@@ -10,6 +11,7 @@ type SelectedImage = { id: number; file: File; previewUrl: string }
 const MAX_IMAGES = 5
 const MAX_FILE_BYTES = 15 * 1024 * 1024
 const SUPPORTED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const API_BASE_URL = import.meta.env.PROD ? import.meta.env.VITE_PROD_API_BASE_URL : ''
 const pageState = ref<PageState>('selecting')
 const selectedImages = ref<SelectedImage[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -146,8 +148,8 @@ async function stitchImages() {
       // 每张图片都使用后端约定的 images 字段。
       formData.append('images', image.file)
     })
-    // 请求同源路径；开发环境由 Vite 代理转发到本地后端。
-    const response = await axios.post<Blob>('/images/stitch', formData, {
+    // 开发环境走 Vite 同源代理；生产构建使用环境变量指定的线上服务。
+    const response = await axios.post<Blob>(`${API_BASE_URL}/images/stitch`, formData, {
       // 成功图片和失败 JSON 都先作为 Blob 接收。
       responseType: 'blob',
       // 保留 4xx/5xx 响应，以便读取业务错误或代理错误。
@@ -210,6 +212,22 @@ async function stitchImages() {
     // 清除已结束的请求引用，避免之后误取消。
     if (activeRequest === controller) activeRequest = null
   }
+}
+
+function resetWorkspace() {
+  if (previewDialog.value?.open) closePreview()
+  selectedImages.value.forEach((image) => URL.revokeObjectURL(image.previewUrl))
+  selectedImages.value = []
+  clearResult()
+  previewId.value = null
+  isResultPreview.value = false
+  previewTrigger = null
+  if (fileInput.value) fileInput.value.value = ''
+  error.value = ''
+  isAdding.value = false
+  nextId = 0
+  pageState.value = 'selecting'
+  void nextTick(() => uploadButton.value?.focus())
 }
 
 onBeforeUnmount(() => {
@@ -288,10 +306,16 @@ onBeforeUnmount(() => {
           <button type="button" class="result-preview" aria-label="放大查看拼接长图" @click="openResultPreview($event)">
             <img :src="resultUrl" alt="" />
           </button>
-          <a ref="downloadLink" class="download-button" :href="resultUrl" download="拼接长图.png">
-            <span>下载图片</span>
-            <span class="primary-action-icon" aria-hidden="true"><img :src="createIcon" alt="" /></span>
-          </a>
+          <div class="result-actions">
+            <a ref="downloadLink" class="download-button" :href="resultUrl" download="拼接长图.png">
+              <span>下载图片</span>
+              <span class="primary-action-icon" aria-hidden="true"><img :src="createIcon" alt="" /></span>
+            </a>
+            <button class="reset-button" type="button" @click="resetWorkspace">
+              <span>重新生成</span>
+              <img :src="backIcon" alt="" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       </section>
     </div>
