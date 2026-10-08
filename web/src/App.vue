@@ -226,8 +226,8 @@ onBeforeUnmount(() => {
       <section class="workspace" aria-labelledby="page-title">
         <div class="page-intro">
           <div class="intro-copy">
-            <h1 id="page-title">图片拼接工具</h1>
-            <p class="intro-subtitle">选好截图，一键拼成长图</p>
+            <h1 id="page-title">拼图小能手</h1>
+            <p class="intro-subtitle">多张截图，轻松拼成一张长图</p>
           </div>
         </div>
 
@@ -251,12 +251,11 @@ onBeforeUnmount(() => {
             :disabled="!canAdd"
             @click="openPicker"
           >
-            <span class="upload-symbol" aria-hidden="true">+</span>
+            <span class="upload-symbol" aria-hidden="true"></span>
             <span class="upload-copy">
               <strong>{{ selectedImages.length ? '继续添加图片' : '选择图片' }}</strong>
               <small>{{ selectedImages.length >= MAX_IMAGES ? '已选满 5 张' : '选择 2-5 张图片' }}</small>
             </span>
-            <span class="upload-arrow" aria-hidden="true">↗</span>
           </button>
 
           <div v-if="selectedImages.length" class="selection">
@@ -278,7 +277,6 @@ onBeforeUnmount(() => {
               <span class="primary-action-icon" aria-hidden="true"><img :src="createIcon" alt="" /></span>
             </button>
           </div>
-          <p class="upload-notice">点击生成后，所选图片将上传至服务端进行拼接。</p>
         </div>
 
         <div v-else-if="pageState === 'processing'" class="processing-view" role="status" aria-live="polite">
